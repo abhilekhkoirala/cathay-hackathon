@@ -5,7 +5,8 @@
   "description": "Fictional airline hackathon demo with .edu student verification",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test aws/test/verify.test.js"
   },
   "engines": {
     "node": ">=18"

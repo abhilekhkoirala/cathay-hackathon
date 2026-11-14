@@ -44,6 +44,7 @@ Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `M7S2HK` (Moscow → H
 
 ### Hosting notes
 
+- **AWS (recommended): see [DEPLOY.md](DEPLOY.md).** `SENDER_EMAIL=you@gmail.com ./aws/deploy.sh` puts the site on S3 + CloudFront and runs the verify API on Lambda + DynamoDB + SES, all from `aws/template.yaml`.
 - **GitHub Pages** is static, so there's no backend: the verify flow automatically falls back to the on-screen demo code. The rest of the app works as before.
 - To send real email from a hosted site, deploy `server.js` somewhere (Render, Fly, EC2, a container…), set the `.env` values there, set `ALLOWED_ORIGIN` to your Pages origin, and set `apiBase` in `config.js` to the backend URL.
 - State (pending codes) is in memory — fine for a demo; use Redis/DynamoDB if you scale it.
@@ -90,9 +91,11 @@ data.js       airports, flight generator, seeded John Doe + trips
 student-zone.js  simulated students per flight, economy cabin layout, student seat planner
 app.js        router, views, booking / check-in / seat map / verification UI
 config.js     apiBase for the verification backend
-server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health
+server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health (local / any Node host)
 mobile.html   phone-frame wrapper around index.html
-.env.example  SMTP settings template
+.env.example  SMTP settings template (server.js only)
+aws/          AWS deployment: template.yaml (SAM), lambda/ (same API on Lambda), deploy.sh, destroy.sh, ses-verify.sh, test/
+DEPLOY.md     step-by-step AWS install + deploy guide
 ```
 
 ## Ideas to extend
