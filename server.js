@@ -181,6 +181,8 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
 
 /* Live demo: shared flights (OAG) and seats for every device. */
 app.use('/api/live', require('./live').router);
+/* Seats and the Student Zone: inventory, allocation engine, confidential exclusions, check-in, operations. */
+app.use('/api/seating', require('./seating/routes').router);
 /* Accounts: sign up, log in, and each user's trips / perks on the server. */
 app.use('/api', accounts.router);
 /* Student flight chat: eligibility, reporting, moderation and retention enforced server-side. */

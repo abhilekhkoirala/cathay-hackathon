@@ -259,11 +259,11 @@ test('expiry before a booked flight: flagged; verification does not cover that f
   const u = db.users[a.user.id];
   assert.equal(SV.eligibleOn(u, near + 'T10:00').ok, true);
   assert.equal(SV.eligibleOn(u, far + 'T10:00').ok, false);
-  const ok = await call('POST', `/api/live/flights/CX250-${near}/pax`, { seg: seg(near), cabin: 'Economy', student: { share: true } }, a.token);
+  const ok = await call('PUT', `/api/seating/flights/CX250-${near}/booking`, { seg: seg(near), cabin: 'Economy', fare: 'Essential', studentSeating: true, showUni: true }, a.token);
   assert.equal(ok.studentDenied, undefined);
   assert.equal(db.flights[`CX250-${near}`].pax[a.user.id].student, true);
   assert.equal(db.flights[`CX250-${near}`].pax[a.user.id].uni, 'CUHK'); // from the verified email, not the request
-  const no = await call('POST', `/api/live/flights/CX250-${far}/pax`, { seg: seg(far), cabin: 'Economy', student: { uni: 'Fake U', share: true } }, a.token);
+  const no = await call('PUT', `/api/seating/flights/CX250-${far}/booking`, { seg: seg(far), cabin: 'Economy', fare: 'Essential', studentSeating: true, uni: 'Fake U', showUni: true }, a.token);
   assert.match(no.studentDenied, /valid until/);
   assert.equal(db.flights[`CX250-${far}`].pax[a.user.id].student, false);
   // Re-verification is allowed early because a booked flight isn't covered, and the current verification stays active meanwhile.
@@ -275,7 +275,7 @@ test('expiry before a booked flight: flagged; verification does not cover that f
 test('student features are refused without verified status (chat, seating, perks, client-set flags)', async () => {
   const a = await newStudent(); // email only
   const dep = inDays(3);
-  await call('POST', `/api/live/flights/CX251-${dep}/pax`, { seg: { ...seg(dep), number: 'CX 251' }, cabin: 'Economy', student: { uni: 'CUHK', share: true } }, a.token);
+  await call('PUT', `/api/seating/flights/CX251-${dep}/booking`, { seg: { ...seg(dep), number: 'CX 251' }, cabin: 'Economy', fare: 'Essential', studentSeating: true, showUni: true }, a.token);
   assert.equal(db.flights[`CX251-${dep}`].pax[a.user.id].student, false);
   const chat = await call('GET', `/api/chat/CX251-${dep}/status`, undefined, a.token);
   assert.equal(chat.eligible, false); assert.match(chat.reason, /Upload your student ID/);
@@ -297,7 +297,7 @@ test('verified students: chat opens; then eligibility ends on the validity date 
   await call('POST', '/api/student/submission', { declared: declared(), documents: [doc(png(), 'image/png')] }, a.token);
   await call('POST', `/api/review/${a.user.id}/decision`, { decision: 'approve', validUntil: inDays(40) }, await getReviewer());
   const dep = inDays(3);
-  await call('POST', `/api/live/flights/CX252-${dep}/pax`, { seg: { ...seg(dep), number: 'CX 252' }, cabin: 'Economy', student: { share: false } }, a.token);
+  await call('PUT', `/api/seating/flights/CX252-${dep}/booking`, { seg: { ...seg(dep), number: 'CX 252' }, cabin: 'Economy', fare: 'Essential', studentSeating: true }, a.token);
   const chat = await call('GET', `/api/chat/CX252-${dep}/status`, undefined, a.token);
   assert.equal(chat.eligible, true, chat.reason);
   const s = await call('GET', '/api/student/status', undefined, a.token);

@@ -36,7 +36,8 @@ function newMemberId() {
   return id;
 }
 /* What the browser may see about its own account. */
-const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: studentVerify.summary(u), moderator: isModerator(u), reviewer: studentVerify.isReviewer(u) });
+const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: studentVerify.summary(u), moderator: isModerator(u), reviewer: studentVerify.isReviewer(u), seatOps: isSeatOps(u) });
+const isSeatOps = (u) => String(process.env.SEAT_OPS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
 /* Account data for the browser. `verified` always comes from the server's verification record, never from a device. */
 const userDataFor = (u) => ({ ...(db.userData[u.id] || {}), verified: studentVerify.clientVerified(u) });
 

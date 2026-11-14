@@ -565,3 +565,27 @@ a.sz-choice{text-decoration:none}
 .sd-chip span{font-size:12px;color:var(--muted)}.sd-chip b{font-size:13.5px}.sd-chip small{display:flex;align-items:center;gap:4px;font-size:12px;color:#0b6b45;font-weight:600}
 .sd-chip small .ico,.sd-badge .ico{width:13px;height:13px}
 .sd-badge{display:inline-flex;align-items:center;gap:4px;margin:4px 0;padding:3px 8px;border-radius:999px;background:#e8f5ee;color:#0b6b45;font-size:11.5px;font-weight:600}
+/* ---------- Student Zone seat map ---------- */
+.seat.taken{background:#d9dde6;border-color:#d9dde6;color:transparent}
+.seat.mine.held{background:var(--mint);border:2px solid var(--brand);color:var(--brand)}
+.seat.zone-res{background:#f3f8e4;border:1px dashed #b7cf78;cursor:default}
+.srow.zrow{background:#f6faea;box-shadow:inset 3px 0 0 var(--lime)}
+.srow.zrow.zlast{border-radius:0 0 10px 10px}
+.zone-cap{display:flex;justify-content:flex-start;padding:6px 8px 2px;background:#f6faea;box-shadow:inset 3px 0 0 var(--lime);border-radius:10px 10px 0 0;margin-top:6px}
+.zone-cap span{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#4d6a12}
+.zone-cap .ico{width:14px;height:14px}
+.seat-legend .lg-held{background:var(--mint);border:2px solid var(--brand)}
+.seat-legend .lg-zone{background:#f6faea;border-color:#b7cf78;box-shadow:inset 3px 0 0 var(--lime)}
+.seat-legend .lg-zone-res{background:#f3f8e4;border:1px dashed #b7cf78}
+.seat-legend .lg-pax{background:#7b8794;border-color:#7b8794}.seat-legend .lg-blk{background:repeating-linear-gradient(135deg,#f8e1de 0 3px,#fff 3px 6px);border-color:#e7b3ab}
+/* operations map */
+.seat.stu-seat{background:var(--leaf);border-color:var(--leaf);color:#fff}
+.seat.pax-seat{background:#7b8794;border-color:#7b8794;color:#fff}
+.seat.blk{background:repeating-linear-gradient(135deg,#f8e1de 0 4px,#fff 4px 8px);border-color:#e7b3ab}
+.ops-review p{margin:6px 0}.ops-review input{flex:1}
+.ops-audit{max-height:260px;overflow:auto}.ops-audit p{margin:2px 0}
+/* private preferences */
+.prefs h3{display:flex;align-items:center;gap:8px}.prefs h3 .ico{color:var(--brand)}
+.prefs-list{display:grid;gap:8px;margin:10px 0;max-height:260px;overflow:auto}
+.prefs .row{margin-top:8px}
+.seat.out{background:transparent;border-color:#eceef3;opacity:.55}
