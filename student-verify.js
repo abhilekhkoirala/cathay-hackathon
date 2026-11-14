@@ -41,7 +41,9 @@ const POLICY = {
   maxFileBytes: 5 * 1024 * 1024,
   minImageSide: 600,              // shorter images are flagged as possibly unreadable (never rejected)
   maxSubmissionsPerDay: 10,
-  autoApprove: String(process.env.STUDENT_AUTO_APPROVE || 'off'), // 'pdf-text' to let clear digital PDFs through
+  // 'off' (default): a reviewer checks every document. 'pdf-text': clear digital PDFs are approved automatically.
+  // 'all': DEMO ONLY, every upload that passes the file checks is approved at once, without a reviewer.
+  autoApprove: String(process.env.STUDENT_AUTO_APPROVE || 'off'),
 };
 const MIME = { 'image/jpeg': 'JPG', 'image/png': 'PNG', 'application/pdf': 'PDF' };
 const ROLES = ['student_id', 'enrolment_proof'];
@@ -532,6 +534,10 @@ function submit(u, body, req) {
   audit(u.id, 'submitted', u.id, rec.submission.id, req);
   if (analysis.auto) {
     decide(u.id, { decision: 'approve', validUntil: minDate(analysis.detectedExpiry, addMonths(today(), POLICY.maxValidityMonths)), source: 'document_text' }, 'auto', req);
+  } else if (POLICY.autoApprove === 'all') {
+    // Demo shortcut: no reviewer. Valid until the date on the document if it's in the future, else the policy default.
+    const until = analysis.expiry && analysis.expiry >= today() ? analysis.expiry : defaultValidity();
+    decide(u.id, { decision: 'approve', validUntil: until, source: 'demo_auto_approve' }, 'auto', req);
   }
   save();
   return { status: 200, view: view(u) };
@@ -609,6 +615,7 @@ function purge() {
   if (changed || db.verifyAudit.length !== n) save();
 }
 setInterval(purge, 60 * 60 * 1000).unref();
+if (POLICY.autoApprove === 'all') console.warn('[student-verify] STUDENT_AUTO_APPROVE=all: every student ID upload is approved WITHOUT review (demo only).');
 
 /* ---------- routes ---------- */
 const isReviewer = (u) => Boolean(u) && [process.env.VERIFIERS, process.env.SEED_VERIFIER_EMAIL].join(',').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);

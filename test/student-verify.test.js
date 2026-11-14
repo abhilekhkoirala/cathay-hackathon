@@ -401,3 +401,17 @@ test('retention: unreviewed documents are deleted after 30 days and the student 
   assert.equal(s.verification.status, 'rejected');
   assert.match(s.verification.rejection.message, /upload it again/);
 });
+
+test('demo mode STUDENT_AUTO_APPROVE=all approves every valid upload at once (and still refuses bad files)', async () => {
+  SV.POLICY.autoApprove = 'all';
+  try {
+    const a = await newStudent();
+    const up = await call('POST', '/api/student/submission', { declared: declared({ expiry: null, noExpiry: true }), documents: [doc(png(320, 200), 'image/png')] }, a.token);
+    assert.equal(up.status, 200, up.error);
+    assert.equal(up.view.status, 'verified');
+    assert.equal(SV._R[a.user.id].validitySource, 'demo_auto_approve');
+    assert.equal(SV._R[a.user.id].validUntil, SV.defaultValidity());
+    const b = await newStudent();
+    assert.equal((await call('POST', '/api/student/submission', { declared: declared(), documents: [doc(Buffer.from('not an image'), 'image/png')] }, b.token)).status, 400);
+  } finally { SV.POLICY.autoApprove = 'off'; }
+});
