@@ -173,3 +173,22 @@ input:focus,select:focus,.btn:focus-visible{outline:2px solid var(--brand2);outl
 }
 @media (max-width:420px){.route{grid-template-columns:1fr}.swap{justify-self:center;transform:rotate(90deg)}.two{grid-template-columns:1fr}.tools{grid-template-columns:repeat(2,1fr)}.pass-grid{grid-template-columns:repeat(2,1fr)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* verification */
+.tick{display:inline-flex;vertical-align:-3px;width:1.05em;height:1.05em;color:#22a559;flex:none}
+.tick svg{width:100%;height:100%}
+.tick.tick-lg{width:.8em;height:.8em;vertical-align:-1px}
+.tick.tick-xl{width:72px;height:72px;margin-bottom:6px}
+.tick.tick-off{color:#b3b8d1;width:26px;height:26px;vertical-align:0}
+.tick-av{display:none;position:absolute;right:-5px;bottom:-4px;width:15px;height:15px;background:#fff;border-radius:50%}
+.avatar{position:relative}
+.member .tick{color:#4be08a}
+.banner{display:flex;align-items:center;gap:12px;margin:16px 0 0;padding:14px 16px;background:#fff;border:1px dashed #b9c0ea;border-radius:14px;color:var(--ink)}
+.banner span:nth-of-type(1){flex:1}
+.banner .ico{color:var(--brand)}
+.code-input{font-size:28px;letter-spacing:.45em;text-align:center;padding:14px}
+.demo-note{background:#fff8e8;border-color:#f1d9a0;box-shadow:none;margin:14px 0;font-size:14px}
+.demo-code{font-size:32px;font-weight:800;letter-spacing:.35em;text-align:center;margin-top:8px;color:var(--brand)}
+.verify-done{text-align:center;display:grid;justify-items:center;gap:6px;padding:32px 20px}
+.verify-done .btn{margin-top:10px}
+@media (max-width:860px){.tick-av{display:inline-flex}.chip-text .tick{display:none}}

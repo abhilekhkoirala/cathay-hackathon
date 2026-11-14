@@ -1,8 +1,18 @@
 # Aurelia Air — Hackathon Demo App
 
-A responsive airline app (desktop + mobile) built with plain HTML/CSS/JS. No build step, no dependencies.
+A responsive airline app (desktop + mobile) with a small Node backend for **.edu student verification**. No build step.
 
-> **Aurelia Air is a fictional airline.** All flights, fares, bookings and people are fake. It is not affiliated with any real airline and is not meant to resemble one's branding.
+> **Aurelia Air is a fictional airline.** All flights, fares, bookings and people are fake. It is not affiliated with any real airline or verification provider.
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env     # optional — leave SMTP_* empty for demo mode
+npm start                # http://localhost:3000   (phone-frame view: /mobile.html)
+```
+
+Without any SMTP settings the app runs in **demo mode**: the 6-digit code is shown on screen instead of being emailed. Everything else works the same.
 
 ## Demo account (already signed in)
 
@@ -13,50 +23,53 @@ A responsive airline app (desktop + mobile) built with plain HTML/CSS/JS. No bui
 | Password | `demo1234` |
 | Member no. | AU 8800 1234 (Gold) |
 
-The app opens **already logged in as John Doe**. Use *Profile → Sign out* to see the logged-out flow; the sign-in page has a one-click "Continue as John Doe" button. *Profile → Reset demo data* restores the seed.
+Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `R3T9WD` (HKG → LHR) · `P8C4HN` (past). *Profile → Reset demo data* restores everything.
 
-Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `R3T9WD` (HKG → LHR) · `P8C4HN` (past).
+## Student verification ("Aurelia Student Verify")
+
+1. Profile → **Verify student status** (or the banner on Home).
+2. Enter any email whose domain has an `edu` label: `name@mit.edu`, `name@cuhk.edu.hk`, `name@student.unsw.edu.au`. (`gmail.com`, `notedu.com` and `edu.com` are rejected.)
+3. A 6-digit code is emailed (or shown on screen in demo mode). It expires in 10 minutes, allows 5 attempts, and can be resent every 30 s.
+4. After confirming, a **green tick** appears next to the username in the header, on the home greeting, the member card and the profile.
+
+### Sending real email with Amazon SES (SMTP)
+
+1. In the SES console (use the region you'll send from), **verify a sender identity** — a domain or an address like `you@gmail.com`.
+2. **SES sandbox:** new accounts can only send *to verified addresses*. Either verify each test recipient (e.g. your `.edu` address) as an identity, or request production access.
+3. SES console → **SMTP settings → Create SMTP credentials**. These are *not* your normal AWS access keys.
+4. Fill in `.env` (see `.env.example`): `SMTP_HOST` (e.g. `email-smtp.ap-southeast-1.amazonaws.com`), `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`.
+5. `npm start` — the console prints `Email: SMTP via ...` when it's active.
+
+**Never commit `.env`** (it's in `.gitignore`) and never put credentials in frontend files.
+
+### Hosting notes
+
+- **GitHub Pages** is static, so there's no backend: the verify flow automatically falls back to the on-screen demo code. The rest of the app works as before.
+- To send real email from a hosted site, deploy `server.js` somewhere (Render, Fly, EC2, a container…), set the `.env` values there, set `ALLOWED_ORIGIN` to your Pages origin, and set `apiBase` in `config.js` to the backend URL.
+- State (pending codes) is in memory — fine for a demo; use Redis/DynamoDB if you scale it.
 
 ## What works
 
-- **Home** — next trip, membership card, offers
-- **Book** — return / one-way search, date strip, outbound + return selection, passenger form, demo payment → creates a real booking in localStorage
-- **My trips** — upcoming / past, trip details, online check-in, boarding pass (demo QR), cancel
-- **Retrieve booking** — works signed-out (try `K7M2QX` + `Doe`)
-- **Travel tools** — flight status, timetable, baggage calculator (others are placeholders to build on)
-- **Profile** — membership progress, preferences (saved), sign out
-
-Flights are generated deterministically from route + date (see `generateFlights` in `data.js`), so the demo behaves consistently.
-
-## Run locally
-
-```bash
-python3 -m http.server 8000   # or: npx serve
-# open http://localhost:8000          (responsive app)
-# open http://localhost:8000/mobile.html   (phone-frame preview)
-```
-
-## Deploy to GitHub Pages
-
-```bash
-git init && git add . && git commit -m "Aurelia Air demo"
-git branch -M main
-git remote add origin https://github.com/<you>/aurelia-air-demo.git
-git push -u origin main
-```
-
-Then **Settings → Pages → Deploy from branch → main / (root)**. Your app will be at `https://<you>.github.io/aurelia-air-demo/`.
+- **Home** — next trip, membership card, offers, verify banner
+- **Book** — return / one-way search, date strip, outbound + return selection, passenger form → booking saved in localStorage
+- **My trips** — upcoming / past, details, online check-in, boarding pass (demo QR), cancel
+- **Retrieve booking** — works signed out (`K7M2QX` + `Doe`)
+- **Travel tools** — flight status, timetable, baggage calculator (others are placeholders)
+- **Profile** — membership progress, preferences, student verification, sign out
 
 ## Structure
 
 ```
-index.html    app shell (header, tab bar, toast)
+index.html    app shell
 styles.css    responsive styles (tab bar < 860px, top nav above)
 data.js       airports, flight generator, seeded John Doe + trips
-app.js        router, views, booking / check-in logic
+app.js        router, views, booking / check-in / verification UI
+config.js     apiBase for the verification backend
+server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health
 mobile.html   phone-frame wrapper around index.html
+.env.example  SMTP settings template
 ```
 
-## Ideas to extend for the hackathon
+## Ideas to extend
 
-Real maps, live-data flight status API, seat-map picker, disruption re-booking assistant, multilingual UI, accessibility audit, PWA install (add a manifest + service worker).
+Seat-map picker, live flight-status API, disruption re-booking assistant, multilingual UI, student-only fares behind the green tick, PWA install.

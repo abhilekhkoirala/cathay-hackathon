@@ -70,11 +70,21 @@
   };
   const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.info}</svg>`;
 
+  const tick = (cls = '') => `<span class="tick ${cls}" title="Verified student" role="img" aria-label="Verified student"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+  const API = String((window.AURELIA_CONFIG && window.AURELIA_CONFIG.apiBase) || '').replace(/\/$/, '');
+  /* .edu rule: domain must contain an "edu" label after the first label (mit.edu, cuhk.edu.hk, ...) */
+  const isEduEmail = (e) => {
+    e = String(e || '').trim().toLowerCase();
+    if (e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return false;
+    return e.split('@')[1].split('.').slice(1).includes('edu');
+  };
+
   /* ---------- state ---------- */
   let user = null;
   let trips = [];
   let tripsTab = 'upcoming';
   const retrieved = new Set();
+  const vs = { step: 'email', email: '', demo: false, demoCode: '', msg: '', busy: false, localCode: null, localExpires: 0 };
   const search = { type: 'return', from: 'HKG', to: '', depart: shiftDate(todayStr(), 14), ret: shiftDate(todayStr(), 21), cabin: 'Economy', pax: 1, step: 'out', out: null, back: null };
 
   function loadState() {
@@ -85,6 +95,7 @@
     const u = JSON.parse(JSON.stringify(SEED_USER));
     if (saved) u.prefs = { ...u.prefs, ...saved };
     user = loggedOut ? null : u;
+    if (user) user.verified = store.get('verified', null);
     window.__seedUser = u;
   }
   const saveTrips = () => store.set('trips', trips);
@@ -167,7 +178,7 @@
     return `
     <section class="hero">
       <p class="eyebrow">${greet}</p>
-      <h1>${user ? `Welcome back, ${esc(user.firstName)}` : 'Where to next?'}</h1>
+      <h1>${user ? `Welcome back, ${esc(user.firstName)}` : 'Where to next?'}${user && user.verified ? ' ' + tick('tick-lg') : ''}</h1>
       <p class="hero-sub">Book, check in and manage every trip in one place.</p>
       <div class="quick">
         <a href="#/book">${icon('plane')}<span>Book a trip</span></a>
@@ -176,6 +187,7 @@
         <a href="#/status">${icon('clock')}<span>Flight status</span></a>
       </div>
     </section>
+    ${user && !user.verified ? `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your .edu email to earn a green tick on your profile.</span></span>${icon('arrow')}</a>` : ''}
     <div class="cols">
       <section>
         <h2>Your next trip</h2>
@@ -201,7 +213,7 @@
     const pct = Math.min(100, Math.round((user.tierPoints / user.nextTierAt) * 100));
     return `<div class="member">
       <div class="row between"><span class="eyebrow-w">Aurelia Club</span><span class="tier">${esc(user.tier)}</span></div>
-      <div class="member-name">${esc(user.firstName)} ${esc(user.lastName)}</div>
+      <div class="member-name">${esc(user.firstName)} ${esc(user.lastName)}${user.verified ? ' ' + tick() : ''}</div>
       <div class="mono">${esc(user.memberId)}</div>
       <div class="row between stats"><div><span class="muted-w sm">Miles</span><b>${user.points.toLocaleString()}</b></div>
         <div><span class="muted-w sm">Status points</span><b>${user.tierPoints} / ${user.nextTierAt}</b></div></div>
@@ -396,6 +408,15 @@
         <div class="sum-row"><span>Phone</span><b>${esc(user.phone)}</b></div>
         <div class="sum-row"><span>Date of birth</span><b>${esc(user.dob)}</b></div>
         <div class="sum-row"><span>Member since</span><b>${esc(user.memberSince)}</b></div>
+        <div class="sum-row"><span>Student status</span><b>${user.verified ? tick() + ' Verified' : 'Not verified'}</b></div>
+      </div>
+      <div class="card">
+        <h3>Student verification</h3>
+        ${user.verified
+          ? `<p class="muted" style="margin-top:0">${tick()} Verified with <b>${esc(user.verified.email)}</b>.</p>
+             <button class="btn btn-ghost block sm-btn" data-action="unverify">Remove verification (demo)</button>`
+          : `<p class="muted" style="margin-top:0">Confirm a university email (.edu) to get a green tick next to your name.</p>
+             <a class="btn btn-primary block" href="#/verify">Verify student status</a>`}
       </div>
       <form id="prefsForm" class="card form">
         <h3>Travel preferences</h3>
@@ -410,6 +431,41 @@
         <button class="btn btn-ghost block" data-action="signout">${icon('logout')} Sign out</button>
         <button class="btn btn-ghost block sm-btn" data-action="reset-demo">Reset demo data</button>
       </div>
+    </div>`;
+  };
+
+  views.verify = () => {
+    const done = user.verified || vs.step === 'done';
+    if (done) {
+      const v = user.verified;
+      return `<div class="narrow">${backLink('#/profile', 'Profile')}
+        <div class="card verify-done">${tick('tick-xl')}<h1>You're verified</h1>
+          <p class="muted">${esc(user.firstName)} ${esc(user.lastName)} now has a green tick next to their name.${v ? '<br>Verified with <b>' + esc(v.email) + '</b>.' : ''}</p>
+          <a class="btn btn-primary block" href="#/home">Back to home</a></div></div>`;
+    }
+    const err = vs.msg ? `<p class="err" role="alert">${esc(vs.msg)}</p>` : '';
+    if (vs.step === 'code') {
+      return `<div class="narrow">${backLink('#/profile', 'Profile')}
+        <h1>Enter your code</h1>
+        <p class="muted">We sent a 6-digit code to <b>${esc(vs.email)}</b>. It expires in 10 minutes.</p>
+        ${vs.demo ? `<div class="card demo-note"><b>Demo mode:</b> no email server is connected, so your code is shown here.<div class="demo-code mono">${esc(vs.demoCode)}</div></div>` : ''}
+        <form id="verifyCodeForm" class="card form" autocomplete="off">
+          <label class="field"><span>6-digit code</span><input name="code" class="code-input mono" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required autofocus></label>
+          ${err}
+          <button class="btn btn-primary block" type="submit">Verify</button>
+          <div class="two"><button class="btn btn-ghost" type="button" data-action="verify-resend">Resend code</button>
+          <button class="btn btn-ghost" type="button" data-action="verify-change">Change email</button></div>
+        </form></div>`;
+    }
+    return `<div class="narrow">${backLink('#/profile', 'Profile')}
+      <h1>Verify student status</h1>
+      <p class="muted">Enter your university email. We'll send a 6-digit code — any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
+      <form id="verifyEmailForm" class="card form" novalidate>
+        <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email)}" required autocomplete="email"></label>
+        ${err}
+        <button class="btn btn-primary block" type="submit">Send code</button>
+      </form>
+      <p class="muted sm">Aurelia Student Verify is a demo feature of a fictional airline. Your address is used only to send the code.</p>
     </div>`;
   };
 
@@ -485,8 +541,8 @@
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile']);
-  const NAV_GROUP = { home: 'home', book: 'book', results: 'book', confirm: 'book', trips: 'trips', trip: 'trips', boarding: 'trips', profile: 'profile', signin: 'profile', tools: 'tools', status: 'tools', baggage: 'tools', retrieve: 'tools', timetable: 'tools' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify']);
+  const NAV_GROUP = { home: 'home', book: 'book', results: 'book', confirm: 'book', trips: 'trips', trip: 'trips', boarding: 'trips', profile: 'profile', verify: 'profile', signin: 'profile', tools: 'tools', status: 'tools', baggage: 'tools', retrieve: 'tools', timetable: 'tools' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -508,7 +564,7 @@
     document.querySelectorAll('[data-nav]').forEach((el) => el.classList.toggle('on', el.dataset.nav === active));
     const slot = $('#userSlot');
     slot.innerHTML = user
-      ? `<a class="chip" href="#/profile"><span class="avatar">${esc(user.firstName[0] + user.lastName[0])}</span><span class="chip-text">${esc(user.firstName)} · ${esc(user.tier)}</span></a>`
+      ? `<a class="chip" href="#/profile"><span class="avatar">${esc(user.firstName[0] + user.lastName[0])}${user.verified ? tick('tick-av') : ''}</span><span class="chip-text">${esc(user.firstName)}${user.verified ? ' ' + tick() : ''} · ${esc(user.tier)}</span></a>`
       : `<a class="chip signin-chip" href="#/signin">Sign in / up</a>`;
     const tabProfile = $('#tabProfile');
     if (tabProfile) tabProfile.querySelector('span').textContent = user ? 'Profile' : 'Sign in';
@@ -557,7 +613,10 @@
     },
     signout() { store.set('loggedOut', true); user = null; toast('Signed out.'); location.hash = '#/home'; render(); },
     'demo-login'() { store.set('loggedOut', false); loadState(); toast('Signed in as John Doe'); location.hash = '#/home'; render(); },
-    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('loggedOut', false); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
+    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
+    unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
+    'verify-resend'() { startVerify(vs.email, true); },
+    'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
     soon(el) { toast(`${el.dataset.label}: placeholder for the hackathon build.`); },
   };
 
@@ -607,6 +666,10 @@
         err.textContent = 'We couldn\'t find a booking with those details.'; err.hidden = false; return;
       }
       retrieved.add(t.ref); location.hash = '#/trip/' + t.ref;
+    } else if (id === 'verifyEmailForm') {
+      startVerify(f.get('email'));
+    } else if (id === 'verifyCodeForm') {
+      confirmVerify(f.get('code'));
     } else if (id === 'prefsForm') {
       const prefs = { seat: f.get('seat'), meal: f.get('meal'), notifications: f.get('notifications') === 'on' };
       store.set('prefs', prefs); user.prefs = prefs; toast('Preferences saved.');
@@ -647,6 +710,70 @@
       <div class="sum-row"><span>Extra bags</span><b>${extraBags} × $100</b></div>
       <div class="sum-row"><span>Overweight</span><b>${overKg} kg × $12</b></div>
       <div class="sum-row total"><span>Estimated fees</span><b>${money(fee)}</b></div></div>`;
+  }
+
+  /* ---------- student verification ---------- */
+  async function apiPost(path, body) {
+    try {
+      const res = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      let data = null;
+      try { data = await res.json(); } catch (_) {}
+      if (!data || typeof data.ok === 'undefined') return { unreachable: true }; // e.g. static hosting returns HTML/404
+      return data;
+    } catch (_) { return { unreachable: true }; }
+  }
+
+  async function startVerify(rawEmail, isResend) {
+    if (vs.busy) return;
+    const email = String(rawEmail || '').trim().toLowerCase();
+    vs.email = email;
+    if (!isEduEmail(email)) {
+      vs.msg = 'Use your university email — the domain must include .edu (e.g. name@uni.edu or name@uni.edu.hk).';
+      vs.step = 'email';
+      return render();
+    }
+    vs.busy = true; vs.msg = '';
+    const r = await apiPost('/api/verify/start', { email, firstName: user ? user.firstName : '' });
+    vs.busy = false;
+    if (r.unreachable) {
+      // No backend (e.g. GitHub Pages): run the whole flow locally in demo mode.
+      vs.localCode = String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
+      vs.localExpires = Date.now() + 10 * 60 * 1000;
+      vs.demo = true; vs.demoCode = vs.localCode; vs.step = 'code';
+      toast('Demo mode: no email server connected.');
+    } else if (!r.ok) {
+      vs.msg = r.error || 'Something went wrong. Please try again.';
+      vs.step = isResend ? 'code' : 'email';
+    } else {
+      vs.localCode = null; vs.demo = !r.sent; vs.demoCode = r.demoCode || ''; vs.step = 'code';
+      toast(r.sent ? 'Code sent to ' + email : 'Demo mode: code shown on screen.');
+    }
+    render();
+  }
+
+  async function confirmVerify(rawCode) {
+    if (vs.busy) return;
+    const code = String(rawCode || '').replace(/\s/g, '');
+    if (!/^\d{6}$/.test(code)) { vs.msg = 'Enter the 6-digit code.'; return render(); }
+    vs.busy = true;
+    let ok = false, msg = '';
+    if (vs.localCode) {
+      if (Date.now() > vs.localExpires) msg = 'That code has expired. Request a new one.';
+      else if (code === vs.localCode) ok = true;
+      else msg = 'That code is not correct.';
+    } else {
+      const r = await apiPost('/api/verify/confirm', { email: vs.email, code });
+      if (r.unreachable) msg = 'Could not reach the verification server.';
+      else if (r.ok && r.verified) ok = true;
+      else msg = r.error || 'That code is not correct.';
+    }
+    vs.busy = false;
+    if (ok) {
+      const v = { email: vs.email, at: toISO(new Date()) };
+      store.set('verified', v); user.verified = v; vs.step = 'done'; vs.msg = '';
+      toast('Student status verified');
+    } else vs.msg = msg;
+    render();
   }
 
   /* ---------- boot ---------- */
