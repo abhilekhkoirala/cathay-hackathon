@@ -24,7 +24,9 @@ const envFile = (() => { try { return fs.readFileSync(path.join(__dirname, '..',
 const fromEnvFile = (k) => ((envFile.match(new RegExp(`^${k}=(.*)$`, 'm')) || [])[1] || '').split(',')[0].trim();
 const BASE = (process.env.BASE || 'http://localhost:3000').replace(/\/$/, '');
 const PASSWORD = process.env.DEMO_PASSWORD || 'CathayDemo2026';
-const REVIEWER = process.env.REVIEWER || fromEnvFile('VERIFIERS') || 'reviewer@demo.cathay.test';
+// The reviewer: the seeded verifier from .env (SEED_VERIFIER_EMAIL / _PASSWORD) when set, else the first VERIFIERS email.
+const SEED_REV = process.env.SEED_VERIFIER_EMAIL || fromEnvFile('SEED_VERIFIER_EMAIL'), SEED_REV_PW = process.env.SEED_VERIFIER_PASSWORD || fromEnvFile('SEED_VERIFIER_PASSWORD');
+const REVIEWER = process.env.REVIEWER || SEED_REV || fromEnvFile('VERIFIERS') || 'reviewer@demo.cathay.test';
 const MODERATOR = process.env.MODERATOR || fromEnvFile('MODERATORS') || 'moderator@demo.cathay.test';
 const tomorrow = () => { const d = new Date(Date.now() + 864e5); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const DATE = process.env.DATE || tomorrow();
@@ -48,8 +50,9 @@ async function call(method, p, body, token) {
   return { status: res.status, ...j };
 }
 async function account(first, last, email) {
-  let r = await call('POST', '/api/auth/signup', { firstName: first, lastName: last, email, password: PASSWORD, dob: '2003-05-20' });
-  if (r.status === 409) r = await call('POST', '/api/auth/login', { email, password: PASSWORD });
+  const pw = email === SEED_REV && SEED_REV_PW ? SEED_REV_PW : PASSWORD;
+  let r = await call('POST', '/api/auth/signup', { firstName: first, lastName: last, email, password: pw, dob: '2003-05-20' });
+  if (r.status === 409) r = await call('POST', '/api/auth/login', { email, password: pw });
   if (!r.token) throw new Error(`${email}: ${r.error || 'could not sign up or sign in (different password?)'}`);
   return r;
 }
@@ -116,8 +119,9 @@ async function makeStudent(p, reviewerToken) {
       delete data.verified;
       await call('PUT', '/api/me/data', { data }, a.token);
     }
-    const r = await call('POST', `/api/live/flights/${fid}/pax`, { seg, cabin: 'Economy', student: { uni: p.inst, share: p.share }, seat: null, locked: null, active: true }, a.token);
+    const r = await call('PUT', `/api/seating/flights/${fid}/booking`, { seg, cabin: 'Economy', fare: FARE, ref, showUni: p.share, studentSeating: true }, a.token);
     if (r.status !== 200) throw new Error(`${p.first} booking: ${r.error}`);
+    if (r.studentDenied) throw new Error(`${p.first} not accepted in the Student Zone: ${r.studentDenied}`);
     say(`${p.first}: verified student, booked ${ref}, ${p.share ? 'shares' : 'hides'} university`);
   }
 

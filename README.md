@@ -29,11 +29,12 @@ There are **no built-in users or bookings**. Create an account (*Sign in → Cre
 
 ## Fares and seat selection
 
-Economy is sold as **Light, Essential and Flex**, as on cathaypacific.com: on **Light, seat selection is a paid extra**; on Essential, Flex and every premium cabin it's included.
+Economy is sold as **Light, Essential and Flex**, as on cathaypacific.com: on **Light, seat selection is a paid extra**; on Essential, Flex and every premium cabin it's included. The server enforces this; see [docs/SEATING.md](docs/SEATING.md).
 
-- **Economy Light check-in:** the seat map is locked. Unlock seat choice for that flight with **1,000 student points** (verified students) or **2,500 Asia Miles**, or take a free assigned seat.
-- **Verified students who answer Yes** to student seating are seated automatically next to students on any Economy fare. On **Economy Flex** (seat choice included) they can also pick their own seat in the student seating view, or go back to the automatic seat.
-- **Premium Economy (2-4-2), Business (1-2-1) and First (1-1-1)** have their own seat maps with free choice. Seats are claimed on the server: if two people pick the same seat at once, the second is told it was just taken.
+- **Seat assignment vs seat selection:** an *assigned* seat (the airline picks it) is free on every fare; *selecting* a seat (you pick it) depends on the fare.
+- **Economy Light check-in:** seat choice is locked. Buy seat selection for that flight with **1,000 student points** (verified students) or **2,500 Asia Miles**, or check in and get a free assigned seat.
+- **Verified students who answer Yes** are allocated a seat in the **Student Zone** on any Economy fare. The zone doesn't override fare rules: Light students get their zone seat assigned; Essential and Flex students can pick another available zone seat.
+- **Premium Economy (2-4-2), Business (1-2-1) and First (1-1-1)** have their own seat maps with free choice. Seats are held and confirmed on the server: if two people pick the same seat at once, the second is told it was just taken.
 - **New verified students** get a one-time **1,500 student points welcome bonus**, enough for one seat unlock.
 
 ## Landing page (`landing.html`)
@@ -49,19 +50,20 @@ A cinematic, scroll-driven opening page for the pitch: one camera move from a je
 With `npm start` (or on a cloud machine, see below), every phone that opens the site shares **one set of flights and seats**:
 
 - **Real schedules:** searches return real Cathay Pacific flights from the **OAG Flight Info API**, fetched by the server. Set `OAG_KEY` in `.env`; the key never reaches the browser. Answers are cached per route and day to save quota. Without a key, or when OAG fails, the app shows the simulated schedule and labels it.
-- **Shared seats, real data only:** bookings, check-in seats and student seating are stored on the server (`data/live-db.json`). There are no simulated passengers or students: every taken seat and every ★ is a real booking. When anyone books or checks in, every open phone updates within a second (Server-Sent Events).
-- **Real students together:** verified students on different phones are seated side by side, same university first (verify both with the same university domain for the demo). If another passenger chooses a seat planned for them, they move together, and the planner's change log says so (no names).
+- **One seat inventory on the server:** bookings, the Student Zone, holds and check-in seats are managed by the seating service (`seating/`). There are no simulated passengers. When anything changes, each signed-in phone gets **its own** updated seat map within a second (Server-Sent Events). It never contains other passengers' identities.
+- **Students together in the Student Zone:** verified students on different phones are seated side by side in the zone, same university first (verify both with the same university domain for the demo).
 - **Two people, one seat:** if two people pick the same seat at once, the second gets "That seat was just taken".
 
 **Demo:**
-1. Create an account on each phone and verify both as students (same university domain).
-2. Book the same flight for tomorrow with "Yes" to student seating.
-3. Check in on both: each is seated next to the other.
-4. Open *See how students are seated* on a laptop and sell the seat planned for one of them. Both phones re-seat live.
+1. Set `SEAT_OPS=you@example.com` in `.env` (operations console) and `VERIFIERS` (student ID review).
+2. Create an account on each phone and verify both as students (same university domain).
+3. Book the same flight for tomorrow with "Yes" to student seating. Both get Student Zone seats side by side (trip page → *Student Zone & private seating preferences*).
+4. On the ops account (*Settings → Seating operations*), block one of their seats or shrink the zone. The affected phone re-seats live.
+5. Check in on both phones.
 
 **Demo data (rehearsals and the pitch):** `BASE=http://<server> DATE=<YYYY-MM-DD> node scripts/demo-setup.js` creates demo accounts through the normal API (the app has no built-in users): two presenter accounts and three more verified students booked on one flight, plus reviewer and moderator accounts. It is safe to run again. The reviewer email must be in `VERIFIERS` on the server.
 
-**Without the server** (any static host, `python3 -m http.server`), everything still works per device in localStorage.
+**Without the server** (any static host, `python3 -m http.server`), search, booking and check-in work per device in localStorage. The Student Zone needs the server.
 
 **Hosting for phones over the internet:** `HOST=ubuntu@<ip> SSH_KEY=<key.pem> bash aws/seat-server.sh` puts it on a Lightsail or EC2 Ubuntu machine. That needs no IAM role, just SSH; open TCP port 3000 in the firewall. Quick alternative from a laptop: `npm start`, then `cloudflared tunnel --url http://localhost:3000`.
 
@@ -106,13 +108,17 @@ Every upload is checked automatically; the results are shown to the reviewer, an
 
 ### Reviewer console (`#/review`)
 
+**Skip the review for a demo:** set `STUDENT_AUTO_APPROVE=all` in `.env` and restart. Every student ID upload that passes the file checks is then approved immediately. Demo only: nobody checks the document.
+
+**Demo logins:** copy `.env.example` to `.env` and sign in as `verifier@cathay.demo` / `verify-demo-2026` (verification team) or `ops@cathay.demo` / `ops-demo-2026` (seating operations). These accounts are created when the server starts, from `SEED_*` values in `.env`. Change the passwords, and never use them on a server others can reach (the deploy script doesn't copy them).
+
 For accounts listed in `VERIFIERS` (`.env`). It shows the queue with the student's typed details, the automated checks, booked flight dates and a suggested validity date. Documents open from memory (never cached). The reviewer approves (validity date, max 12 months) or rejects with a reason and an optional note. Reviewers can't review their own submission, and a decision made on a document the student has since replaced is refused.
 
 ### Security and privacy
 
 - **Server-enforced:** the browser's copy of "verified" is display-only. `/api/me/data` ignores a `verified` value sent by a device, and only a currently verified student can add student-only perks (welcome bonus, rewards paid with student points, adapter). Student seating (`live.js`) and the student chat (`chat-server.js`) check the server record **for the flight date**, and the student's university comes from the verified email, not the request.
 - **Private storage:** documents are stored in `data/vault/` (git-ignored, never served by `server.js`) under random ids, **encrypted with AES-256-GCM** using a per-file key wrapped by `DOC_ENCRYPTION_KEY` (envelope encryption).
-- **Access:** only reviewers can download a document (`no-store`, sandboxed CSP). Other passengers and students never see documents, ID numbers or verification details; they only see the existing ★ / tick.
+- **Access:** only reviewers can download a document (`no-store`, sandboxed CSP). Other passengers and students never see documents, ID numbers or verification details; they only see the green tick.
 - **Access log:** every submission, view, decision and deletion is logged (`db.verifyAudit`: who, what, when, IP; no document contents) and kept for 365 days.
 - **Retention:** a document is **deleted as soon as a decision is made** (deleted on replace or remove too). Unreviewed documents are deleted after 30 days and the student is asked to upload again. Afterwards only the outcome, institution, validity date and a SHA-256 of the file remain. Text read from PDFs is used once and not stored. Students can remove their verification entirely (*Settings → Remove my student verification*).
 - **Minimal data:** no passports or other identity documents are asked for, and ID numbers aren't needed or stored.
@@ -151,33 +157,21 @@ The AWS Lambda edition (`aws/lambda/verify.js`) still covers step 1 (email) only
 - To send real email from a hosted site, deploy `server.js` somewhere (Render, Fly, EC2, a container…), set the `.env` values there, set `ALLOWED_ORIGIN` to your Pages origin, and set `apiBase` in `config.js` to the backend URL.
 - State (pending codes) is in memory — fine for a demo; use Redis/DynamoDB if you scale it.
 
-## Student seating
+## Student Zone seating
 
-Verified students (18+) are automatically seated next to another student, so a student flying to a new city for the first time can talk to people going to the same university about campus, housing, getting there and everything else, instead of just sleeping through the flight. Verified students see one question, in *Review & pay* and on the trip page: **"Do you want to be seated next to students?"** *Yes* shows a confirmation pop-up and they are seated next to students automatically; *No* means they book and check in like any other passenger. Students never choose their seat themselves.
+**Full design: [docs/SEATING.md](docs/SEATING.md).** It covers architecture, allocation rules, the data model, the API, production integration and DynamoDB design, and limitations.
 
-There is **no student section**. The planner seats students in small groups of 2–3 side by side, e.g. `9A 9B 9C`, then `13A 13B`, from the same university when possible, otherwise any students. **Every other seat stays on sale.** When a paying passenger buys a seat that was planned for a student, the planner re-runs and moves only the students whose group was broken; everyone else keeps their seat. A student's seat is fixed once they check in.
+Verified students (18+, verification valid on the flight date) who answer **Yes** to *"Do you want to be seated next to students?"* are allocated a seat in the **Student Zone**. This is a block of whole Economy rows on the real seat map (default 48–52 on wide-bodies, 30–33 on the A321neo), set per flight by airline operations.
+
+- **Protected, not wasted:** zone seats can't be sold through other channels while the zone is reserved. Unused zone seats go back on general sale 24 h before departure (configurable), so no seat stays empty because of the zone. Capacity counts real seats only.
+- **Grouping:** students are seated in groups of 2–3 side by side, from the same university when possible. Only students whose seat is genuinely affected move when something changes. Checked-in students never move automatically.
+- **Private seating preferences:** a student can choose other students on the flight (those visible in its student chat) they'd rather not sit next to. One student's choice applies **both ways**. It's confidential: never shown, never notified, never in any API answer. Students can't ask to sit *next to* someone. The same store is used by *"Don't seat me next to them"* in the chat.
+- **Restrictions are hard rules:** if no valid seat exists, the student isn't forced next to someone. They see a neutral *"we need to arrange your seat by hand"* message, and operations get a review to resolve manually (*Settings → Seating operations*).
+- **Seat map:** available, selected, your seat, not available (which also covers restricted seats, so nobody can tell why), and Student Zone rows with a subtle marker. No stars and no other passengers' details; a student sees only how many students sit next to them and, if those students chose to share it, their university.
+- **Fares:** zone allocation is free on every fare, but choosing a different seat is seat selection: included in Essential and Flex, not in Light.
 
 **Fly with other students:** when a verified student searches, a card suggests dates within ±3 days (same route) whose flights already have the most students booked, and flights show a *"5+ students on this flight"* badge. Only students who chose student seating and were verified by the server are counted, shown only as bands (3+, 5+, 10+): flights with fewer than 3 students are never mentioned, so nobody can be singled out. No names, no exact counts. It uses bookings on our server, not extra OAG calls.
 
-**Privacy:** names are never shown to other passengers, on any screen or in any API answer: other students appear as **★ Student**. A student's university is shown only if they ticked *"Show my university to students seated near me"* when booking (changeable on the trip page). Hover a ★ in the planner for a small panel: *"Student · CUHK"* or *"Student · university not shared"*.
-
-**Demo flow** (verify with e.g. `name@link.cuhk.edu.hk`):
-
-1. Book an Economy flight for tomorrow (check-in opens 48 h before) and answer **Yes** to *Do you want to be seated next to students?*
-2. **Check in** → *Your seat*: the seat is already chosen, next to other students (e.g. *"40G, next to 2 students · one from CUHK · Same university as you"*).
-3. The boarding pass shows a **STUDENT** tag and how many students you're seated next to.
-4. **See student seating on this flight** opens a live, read-only view of the cabin: students as ★, other passengers, free seats and a change log. It isn't offered on Economy Light (no seat choice there).
-
-Non-students check in with a normal seat map and can pick any free seat, including seats the planner had in mind for students.
-
-**How the planner decides**
-
-1. Students who still sit next to another student keep their seats; checked-in students never move.
-2. Everyone else is grouped: same-university groups of 3 or 2 first, then mixed groups (never a group of 1 if it can be avoided).
-3. Each group goes into the tightest run of free seats side by side that fits, so bigger gaps stay free for paying passengers.
-4. If a group doesn't fit: split it, pair leftover students together, sit them beside any seated student, or borrow one student from a group of 3. Only as a last resort does a student sit alone.
-
-Only real bookings are shown. (`SIMULATE` in `student-zone.js` can switch simulated background passengers back on for offline demos.)
 
 ## Student flight chat (safety by design)
 
@@ -208,9 +202,39 @@ A group chat per flight for verified students, run by our server (`chat-server.j
 - **Moderators reading reported content.**
 - **Retaliation protections.**
 
-## Parent Pass
+## Latest changes (15 Nov)
 
-A verified student invites **up to 2 parents** with a Parent Pass link (`#/p/CODE`, on the student perks page). The parent sees what they get, creates a normal account (no passport scan) and their trips come with **+1 checked bag (23 kg)** and a **free date change**. Their **first booked trip** earns a welcome bonus of **20% of its Asia Miles**. It's valid while the student is verified **and 6 months after** (the graduation trip). The app nudges the student when graduation is within 6 months or their first trip to the university's country is coming up. Parents get no student features and never see their student's chats or seat. Links from members who aren't verified students do nothing, and the server enforces the limit of 2 parents.
+- **One balance for students:** while you study, your student points are your miles. Students see only student points; non-students see Asia Miles.
+- **Seat selection before payment** on every fare that includes it (Essential, Flex, Premium Economy, Business, First): *Continue: choose your seat* → seat map → *Confirm and pay* (or skip and get a free seat at check-in).
+- **Student seat page:**
+  - hover a ★ to see "Student · CUHK", or just "Student" if that student didn't share their university
+  - choosing your own seat is part of the "Your allocation" box
+  - one entry on the trip page
+- **Companion Pass** (formerly Parent Pass): one visit per parent during the whole study programme.
+- **Invites:** up to 5 friends.
+- **Partner bank offer** for verified students (a student account that earns student points on daily purchases) replaces the student card concept.
+- **Student perks page, ordered by importance:**
+  1. points and rewards
+  2. invites and Companion Pass
+  3. graduation gift
+  4. partner bank offer
+  5. travel adapter
+- **Cinematic landing page** (`landing.html`): reached from *Discover student benefits* and from the public home.
+
+## Dynamic student seating (default: `SEATING_MODE=dynamic`)
+
+There is **no reserved Student Zone** by default. Verified students who said yes are seated **anywhere in Economy**, in groups of 2–3 side by side, same university first. **No seat is held back from sale.**
+
+- **A paying passenger can take any free seat**, including one only *planned* for a student. They can buy it in the app or through another sales channel.
+- **When that happens, the plan re-runs.** Students still sitting next to another student keep their seats. Anyone left alone is regrouped, borrowing one student from a group of 3 if needed, so **nobody sits alone** when the cabin allows it. Example: 6 students in 9A–9C and 14A–14C; someone buys 14A; the student from 14A is re-seated next to at least one student.
+- **Never taken from a student:** a checked-in student's seat, a seat placed by operations, or a seat an Essential or Flex student chose themselves.
+- **Unchanged:** private exclusions, Economy Light rules, the review queue and the live updates work as before.
+
+The protected-rows design is still available with `SEATING_MODE=zone` (`test/seating.test.js` covers it; `test/seating-dynamic.test.js` covers the default).
+
+## Companion Pass
+
+A verified student invites **up to 2 parents** with a Companion Pass link (`#/p/CODE`, on the student perks page). The parent sees what they get, creates a normal account (no passport scan) and each parent gets **one visit during the whole study programme** with **+1 checked bag (23 kg)** and a **free date change**. Their **first booked trip** earns a welcome bonus of **20% of its Asia Miles**. It's valid while the student is verified **and 6 months after** (the graduation trip). The app nudges the student when graduation is within 6 months or their first trip to the university's country is coming up. Parents get no student features and never see their student's chats or seat. Links from members who aren't verified students do nothing, and the server enforces the limit of 2 parents.
 
 ## Student perks
 
@@ -219,7 +243,7 @@ Unlocked automatically by the verified student membership (*Points & rewards*, o
 | Perk | What the student gets | Why it costs Cathay almost nothing |
 |---|---|---|
 | **Free travel adapter** | A welcome gift for new students: a free adapter for the country of their university (worked out from the verified email: `cuhk.edu.hk` → Hong Kong, Type G; `.ac.uk` → UK; `.edu` → US…), on their first flight to that country, handed out on board by the crew. **Once per study programme.** Not offered when the home plugs are the same. Shown on the trip page and the boarding pass. | A few HK$, once per student, only for those who claim it (crew loads exactly what was claimed). |
-| **Invite friends** | Personal link (`#/r/NAME-XXXX`); it opens sign-up with a pop-up explaining the bonus, and the inviter gets the same explanation the first time they scroll to their invite card. When the friend books their **first flight** (cancelled bookings don't count), **both** get a bonus based on the Asia Miles a normal member earns on that booking: a non-student gets **20%** of it as Asia Miles; a verified student gets **¼ of the booking's student points** (¼ × 1.5 = 0.375 per mile) as student points. Up to 10 friends. Friends show as *Friend J.* (initial only). | The bonus is paid only for a real booking; the student side costs ≈ 0.375 × 0.7 × 0.85 ≈ 0.22 miles per mile, close to the 0.20 of a non-student, while students get more. |
+| **Invite friends** | Personal link (`#/r/NAME-XXXX`); it opens sign-up with a pop-up explaining the bonus, and the inviter gets the same explanation the first time they scroll to their invite card. When the friend books their **first flight** (cancelled bookings don't count), **both** get a bonus based on the Asia Miles a normal member earns on that booking: a non-student gets **20%** of it as Asia Miles; a verified student gets **¼ of the booking's student points** (¼ × 1.5 = 0.375 per mile) as student points. Up to 5 friends. Friends show as *Friend J.* (initial only). | The bonus is paid only for a real booking; the student side costs ≈ 0.375 × 0.7 × 0.85 ≈ 0.22 miles per mile, close to the 0.20 of a non-student, while students get more. |
 | **Student points** | While studying, flights earn 1.5 student points for every Asia Mile a normal member would earn (*instead of* miles; credited at check-in). Asia Miles from cards, partners and invites keep coming as usual. Both balances show side by side on the member card. Points are **spent during studies** on Economy trips, from each trip page (*Pay with student points*) or the perks page: Wi-Fi messaging pass (1,000), full-flight Wi-Fi (5,000), preferred seat if still empty at check-in (1,000), lounge pass (6,000). At graduation **70% of what's left converts to Asia Miles**, the rest expires. | Cathay pays ≈ 0.89× normal miles, students get 1.05×; every reward is priced at or above its cost to Cathay (maths below). |
 | **Graduation gift** | **70% of the student points convert to Asia Miles** (always), plus **one status tier up for 12 months** (e.g. Gold → Diamond) **only if the student flew Cathay at least once in their last 18 months as a student**. The card shows whether the upgrade is unlocked. Expected graduation date can be saved. | A few lounge visits and miles, to keep the graduate when they start flying for work. |
 
@@ -245,7 +269,7 @@ Miles from perks are added to the member card; the graduation status shows on th
 ## What works
 
 - **Overview (Home)** — student points + breakdown donut, next flight, flight companion (locks until 7 days before departure), student exclusives, quick links (incl. Student perks), recent activity
-- **My flights** — upcoming / past, details, online check-in with seat maps for every cabin, automatic student seating + live student seating view, student flight chat, boarding pass (demo QR), cancel; plus **Book a flight** (return / one-way search, date strip, passenger form → saved in localStorage)
+- **My flights** — upcoming / past, details, online check-in with seat maps for every cabin, Student Zone allocation with private seating preferences (server-managed, live), student flight chat, boarding pass (demo QR), cancel; plus **Book a flight** (return / one-way search, date strip, passenger form → saved in localStorage)
 - **Points & rewards** — student points balance, breakdown, student perks (adapter, invites, rewards paid with points, graduation gift) and activity list
 - **Student offers** — destination offers from Hong Kong, student verification prompt
 - **Retrieve booking** — booking reference + family name (bookings made on this device)
@@ -259,7 +283,7 @@ Miles from perks are added to the member card; the graduation status shows on th
 index.html    app shell (sidebar on desktop, header + 4-icon tab bar below 860px)
 styles.css    design tokens + responsive styles
 data.js       airports, cabins, fares (Light / Essential / Flex), simulated flight generator
-student-zone.js  cabin layouts, student seat planner (incl. private exclusions), perks data
+student-zone.js  cabin layouts (shared by app and server), university names, perks helpers
 app.js        router, views, booking / check-in / seat map / perks / verification UI
 config.js     apiBase for the verification backend
 server.js     Express: POST /api/verify/start, /api/verify/confirm (step 1, email), GET /api/health (local / any Node host)
@@ -267,7 +291,10 @@ student-verify.js  step 2 (student ID): upload, encrypted storage, status workfl
 accounts.js   sign-up / sign-in / sessions / per-user data / referrals (/api/auth, /api/me)
 db.js         JSON-file database shared by accounts.js and live.js
 chat-server.js student flight chat: eligibility, reports, moderation, two-strike rule, retention (/api/chat, /api/mod)
-live.js       live demo API (/api/live): shared flights and seats, student planner on the server, Server-Sent Events
+live.js       flight search API (/api/live): OAG schedules (cached) or simulated
+seating/      seat inventory + Student Zone (/api/seating): engine.js (allocation), inventory.js (adapter),
+              repository.js (persistence), service.js (bookings, holds, check-in, exclusions, reviews), routes.js
+docs/SEATING.md  seating architecture, allocation rules, production integration
 oag.js        OAG Flight Info API client (server-side, key from .env)
 mobile.html   phone-frame wrapper around index.html (9:41 status bar)
 .env.example  SMTP settings template (server.js only)

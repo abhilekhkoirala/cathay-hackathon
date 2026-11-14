@@ -18,7 +18,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { db, save } = require('./db');
 const { auth, ageOn, isModerator } = require('./accounts');
-const live = require('./live');
+const seating = require('./seating/service'); // bookings, pseudonyms and confidential seating exclusions
 const studentVerify = require('./student-verify');
 
 const OPEN_BEFORE_MS = 7 * 24 * 3600 * 1000;
@@ -53,7 +53,7 @@ function ineligible(u, fid) {
   if (!elig.ok) return elig.reason;
   if ((C.removed[fid] || {})[u.id]) return 'You have been removed from this chat for not following the student chat guidelines.';
   if (ageOn(u.dob, f.seg.dep) < 18) return 'The student chat is for students aged 18 and over.';
-  if (!f.pax[u.id]) return 'Only passengers booked on this flight can join its chat.';
+  if (!f.pax[u.id] || !seating.paxOf(fid, u.id)) return 'Only passengers booked on this flight can join its chat.';
   const t = times(f);
   if (now() < t.opens) return `The chat opens 7 days before departure, on ${new Date(t.opens).toISOString().slice(0, 10)}.`;
   if (now() > t.deletes) return 'This chat has closed and its messages have been deleted.';
@@ -63,7 +63,7 @@ function ineligible(u, fid) {
 /* What other members may see about a message author (data minimisation). */
 function authorView(fid, uid) {
   const u = db.users[uid] || {}, p = (db.flights[fid] || { pax: {} }).pax[uid] || {};
-  return { author: live.pseudo(uid, fid), name: u.firstName || 'Student', uni: p.share ? p.uni : '' };
+  return { author: seating.pseudo(uid, fid), name: u.firstName || 'Student', uni: p.share ? p.uni : '' };
 }
 const publicMsg = (fid, m) => ({ id: m.id, ts: m.ts, text: m.text, ...authorView(fid, m.uid) });
 
@@ -130,7 +130,7 @@ router.get('/chat/:fid/messages', auth, (req, res) => {
   if (why) return res.status(403).json({ ok: false, error: why });
   const ticket = crypto.randomBytes(24).toString('hex');
   tickets.set(ticket, { uid: req.user.id, fid, exp: now() + 60000 });
-  res.json({ ok: true, me: live.pseudo(req.user.id, fid), messages: room(fid).messages.slice(-200).map((m) => publicMsg(fid, m)), ticket,
+  res.json({ ok: true, me: seating.pseudo(req.user.id, fid), messages: room(fid).messages.slice(-200).map((m) => publicMsg(fid, m)), ticket,
     warning: (C.strikes[req.user.id] || []).length === 1 });
 });
 
@@ -180,15 +180,13 @@ router.post('/chat/:fid/report', auth, (req, res) => {
 });
 
 /* Privately ask not to be seated next to the author of a message. Never disclosed to anyone. */
-router.post('/chat/:fid/avoid', auth, (req, res) => {
-  const fid = req.params.fid, why = memberOk(req.user, fid), f = db.flights[fid];
+router.post('/chat/:fid/avoid', auth, async (req, res) => {
+  const fid = req.params.fid, why = memberOk(req.user, fid);
   if (why) return res.status(403).json({ ok: false, error: why });
   const m = room(fid).messages.find((x) => x.id === (req.body || {}).messageId);
   if (!m || m.uid === req.user.id) return res.status(400).json({ ok: false, error: 'Not possible for this message.' });
-  f.avoid = f.avoid || {};
-  const list = f.avoid[req.user.id] = f.avoid[req.user.id] || [];
-  if (!list.includes(m.uid)) list.push(m.uid);
-  live.replan(f); save(); live.broadcast(fid);
+  try { await seating.addExclusion(req.user.id, fid, m.uid); } // stored in the confidential seating preferences
+  catch (e) { return res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'Something went wrong.' }); }
   res.json({ ok: true, message: "Done. We won't seat you next to this person. Nobody is told." });
 });
 
@@ -234,11 +232,10 @@ router.post('/mod/reports/:id', auth, mod, (req, res) => {
       // 2nd confirmed violation (or a critical one): removed from the chat and booking cancelled, no refund (team policy).
       outcome = 'cancelled';
       (C.removed[r.fid] = C.removed[r.fid] || {})[r.reported] = r.id;
-      const f = db.flights[r.fid];
-      if (f && f.pax[r.reported]) { delete f.pax[r.reported]; live.replan(f); live.broadcast(r.fid); }
+      if (seating.paxOf(r.fid, r.reported)) seating.cancel(r.reported, r.fid, 'conduct').catch((e) => console.error('[chat] cancel', e.message));
       const data = db.userData[r.reported] || {};
       (data.trips || []).forEach((t) => {
-        if (t && t.status === 'Confirmed' && (t.segments || []).some((s) => live.flightId(s) === r.fid)) {
+        if (t && t.status === 'Confirmed' && (t.segments || []).some((s) => seating.flightId(s) === r.fid)) {
           t.status = 'Cancelled'; t.cancelReason = 'Cancelled for breaking the student chat guidelines (second confirmed violation). No refund.';
         }
       });

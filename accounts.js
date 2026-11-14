@@ -36,7 +36,8 @@ function newMemberId() {
   return id;
 }
 /* What the browser may see about its own account. */
-const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: studentVerify.summary(u), moderator: isModerator(u), reviewer: studentVerify.isReviewer(u) });
+const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: studentVerify.summary(u), moderator: isModerator(u), reviewer: studentVerify.isReviewer(u), seatOps: isSeatOps(u) });
+const isSeatOps = (u) => [process.env.SEAT_OPS, process.env.SEED_OPS_EMAIL].join(',').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
 /* Account data for the browser. `verified` always comes from the server's verification record, never from a device. */
 const userDataFor = (u) => ({ ...(db.userData[u.id] || {}), verified: studentVerify.clientVerified(u) });
 
@@ -65,6 +66,34 @@ const ageOn = (dob, when) => {
   return a;
 };
 const isModerator = (u) => String(process.env.MODERATORS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
+
+/* Demo staff logins, taken from .env (never hard-coded): SEED_VERIFIER_EMAIL / SEED_VERIFIER_PASSWORD (student ID
+ * review) and SEED_OPS_EMAIL / SEED_OPS_PASSWORD (seating operations). Created at startup if missing; the password
+ * is set to the .env value on every start, so .env stays the source of truth. The seeded emails get their role
+ * automatically (no need to repeat them in VERIFIERS / SEAT_OPS). For local demos: aws/seat-server.sh does not copy
+ * these keys to a server. */
+function seedStaff() {
+  const seeds = [
+    ['SEED_VERIFIER', 'Verification', 'Team'],
+    ['SEED_OPS', 'Seating', 'Operations'],
+  ];
+  let changed = false;
+  for (const [key, firstName, lastName] of seeds) {
+    const email = String(process.env[key + '_EMAIL'] || '').trim().toLowerCase(), password = String(process.env[key + '_PASSWORD'] || '');
+    if (!email && !password) continue;
+    if (!EMAIL_RE.test(email) || password.length < 8) { console.warn(`[accounts] ${key}_EMAIL / ${key}_PASSWORD ignored: needs a valid email and a password of 8+ characters.`); continue; }
+    let u = byEmail(email);
+    if (!u) {
+      u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), firstName, lastName, email, dob: '1990-01-01', memberId: newMemberId(), refCode: newRefCode(firstName), createdAt: new Date().toISOString(), invitedBy: '' };
+      db.users[u.id] = u; db.userData[u.id] = {};
+      console.log(`[accounts] Seeded staff account ${email}`);
+    }
+    if (!u.salt || !checkPw(password, u)) { u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPw(password, u.salt); }
+    changed = true;
+  }
+  if (changed) save();
+}
+seedStaff();
 
 const router = express.Router();
 const hits = new Map();

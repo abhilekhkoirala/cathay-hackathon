@@ -571,3 +571,41 @@ a.sz-choice{text-decoration:none}
 .pp-deals>div{display:grid;gap:3px;padding:12px;border-radius:12px;background:var(--mint,#eef4ec)}
 .pp-deals .ico{width:20px;height:20px;color:var(--brand)}.pp-deals b{font-size:14px}
 .parent-banner{margin:0 0 18px}
+/* ---------- Student Zone seat map ---------- */
+.seat.taken{background:#d9dde6;border-color:#d9dde6;color:transparent}
+.seat.mine.held{background:var(--mint);border:2px solid var(--brand);color:var(--brand)}
+.seat.zone-res{background:#f3f8e4;border:1px dashed #b7cf78;cursor:default}
+.srow.zrow{background:#f6faea;box-shadow:inset 3px 0 0 var(--lime)}
+.srow.zrow.zlast{border-radius:0 0 10px 10px}
+.zone-cap{display:flex;justify-content:flex-start;padding:6px 8px 2px;background:#f6faea;box-shadow:inset 3px 0 0 var(--lime);border-radius:10px 10px 0 0;margin-top:6px}
+.zone-cap span{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#4d6a12}
+.zone-cap .ico{width:14px;height:14px}
+.seat-legend .lg-held{background:var(--mint);border:2px solid var(--brand)}
+.seat-legend .lg-zone{background:#f6faea;border-color:#b7cf78;box-shadow:inset 3px 0 0 var(--lime)}
+.seat-legend .lg-zone-res{background:#f3f8e4;border:1px dashed #b7cf78}
+.seat-legend .lg-pax{background:#7b8794;border-color:#7b8794}.seat-legend .lg-blk{background:repeating-linear-gradient(135deg,#f8e1de 0 3px,#fff 3px 6px);border-color:#e7b3ab}
+/* operations map */
+.seat.stu-seat{background:var(--leaf);border-color:var(--leaf);color:#fff}
+.seat.pax-seat{background:#7b8794;border-color:#7b8794;color:#fff}
+.seat.blk{background:repeating-linear-gradient(135deg,#f8e1de 0 4px,#fff 4px 8px);border-color:#e7b3ab}
+.ops-review p{margin:6px 0}.ops-review input{flex:1}
+.ops-audit{max-height:260px;overflow:auto}.ops-audit p{margin:2px 0}
+/* private preferences */
+.prefs h3{display:flex;align-items:center;gap:8px}.prefs h3 .ico{color:var(--brand)}
+.prefs-list{display:grid;gap:8px;margin:10px 0;max-height:260px;overflow:auto}
+.prefs .row{margin-top:8px}
+.seat.out{background:transparent;border-color:#eceef3;opacity:.55}
+
+/* grey subtitles under page titles: hidden (requested) */
+.pagehead .sub,.sect .sub{display:none}
+/* partner bank offer */
+.bank-ad{position:relative;display:grid;gap:10px;background:linear-gradient(140deg,#fffdf3,#f3f8e4);border-color:#e3e9c8}
+.ad-tag{justify-self:start;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6d7a2a;background:#eef3d3;border-radius:999px;padding:3px 8px}
+.bank-head{display:flex;gap:12px;align-items:flex-start}.bank-head .ico{width:24px;height:24px;color:var(--brand);flex:none}.bank-head h3{margin:0}.bank-head p{margin:2px 0 0;color:var(--muted);font-size:14px}
+.bank-list{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:14px}.bank-list .ico{width:15px;height:15px;color:var(--brand);vertical-align:-2px}
+.bank-ad .btn{justify-self:start}
+.discover-link h3{display:flex;gap:8px;align-items:center}.discover-link .ico{color:var(--brand)}
+.alloc-pick{display:grid;gap:4px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);font-size:13.5px}
+.alloc-pick b{display:flex;align-items:center;gap:6px}.alloc-pick .ico{width:16px;height:16px;color:var(--brand)}
+.pay-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center;border-color:var(--brand);background:#f3f8f2;margin-bottom:14px}
+.pay-bar b{display:block}.pay-bar .eyebrow{margin:0 0 2px}

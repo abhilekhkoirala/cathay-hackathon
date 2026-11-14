@@ -140,7 +140,7 @@
     store.set('account', acct);
     activeId = acct.id; refsCache = null; fetchRefs.at = 0;
     Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null, files: {}, form: {}, replace: false });
-    sv = null;
+    sv = null; seatReset();
     if (data) for (const k of SYNCED) store.set(k, k in data ? data[k] : null, true);
     loadState();
   }
@@ -199,7 +199,7 @@
   function signOutLocal(msg) {
     if (session() && !isLocalAccount()) authCall('POST', '/auth/logout', {});
     store.set('session', ''); store.set('account', null);
-    loadState(); refsCache = null;
+    seatReset(); loadState(); refsCache = null;
     if (msg) toast(msg);
     location.hash = '#/home'; render();
   }
@@ -303,79 +303,27 @@
   }
   const seatYesModal = () => showModal('Great choice!', "We will do our best to seat you next to other students on this flight. Your seat will be assigned automatically at check-in.");
 
-  /* ---------- live demo: shared flights and seats (server.js → live.js, /api/live) ----------
-   * When the server is reachable, every phone sees the same real flights (OAG) and the same seats,
-   * updated within a second over Server-Sent Events. Without it, everything stays in localStorage. */
-  const LIVE = { on: false, flights: {}, state: {}, seen: {}, es: {}, sent: {}, timer: null };
+  /* ---------- server connection: flight search (/api/live) and seats (/api/seating) ----------
+   * With the server, the seating service is the single source of truth: this app registers bookings, shows the
+   * seat map the server sends for THIS passenger, and asks the server to hold, select or assign seats. It never
+   * computes allocations itself and never sees other passengers' identities. Without a server (static hosting)
+   * only flight search falls back to simulated data; the Student Zone needs the server. */
+  const LIVE = { on: false, flights: {} };
   const liveId = (s) => s.number.replace(/\s+/g, '') + '-' + s.dep.slice(0, 10);
-  const segOut = (s) => ({ number: s.number, from: s.from, to: s.to, dep: s.dep, arr: s.arr, aircraft: s.aircraft, durMin: s.durMin, stops: s.stops });
-  async function liveCall(path, body) {
+  const segOut = (s) => ({ number: s.number, from: s.from, to: s.to, dep: s.dep, arr: s.arr, aircraft: s.aircraft });
+  async function liveCall(path) {
     try {
-      const headers = session() && !isLocalAccount() ? { Authorization: 'Bearer ' + session() } : {};
-      const res = await fetch(API + '/api/live' + path, body === undefined ? { headers } : { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+      const res = await fetch(API + '/api/live' + path);
       const j = await res.json().catch(() => ({}));
-      if (j.state) liveApply(j.state);
       return { ok: res.ok, status: res.status, ...j };
     } catch { return { ok: false, status: 0, error: 'Could not reach the live server.' }; }
   }
-  const LIVE_VIEWS = new Set(['results', 'trip', 'seats', 'planner', 'boarding']);
+  const LIVE_VIEWS = new Set(['results', 'trip', 'seats', 'planner', 'boarding', 'seating-ops']);
   function liveRerender() {
-    if (!LIVE_VIEWS.has(route()[0]) || document.querySelector('.modal-bg')) return;
+    if (!LIVE_VIEWS.has(route()[0]) || document.querySelector('.modal-bg') || document.querySelector('.prefs-open')) return;
     const y = window.scrollY; render(); window.scrollTo(0, y);
   }
-  function liveApply(st) {
-    const old = LIVE.state[st.id];
-    if (old && old.v >= st.v) return;
-    LIVE.seen[st.id] = old ? old.plan : st.plan;
-    LIVE.state[st.id] = st;
-    liveRerender();
-    if (old && LIVE_VIEWS.has(route()[0]) && route()[0] !== 'results' && JSON.stringify(old.plan) + old.sales + JSON.stringify(old.pax) !== JSON.stringify(st.plan) + st.sales + JSON.stringify(st.pax)) flashTick('Seats updated live');
-  }
-  function liveWatch(id) {
-    if (LIVE.es[id] || !window.EventSource) return;
-    const es = LIVE.es[id] = new EventSource(API + '/api/live/flights/' + id + '/events');
-    es.onmessage = (e) => { try { liveApply(JSON.parse(e.data)); } catch {} };
-  }
-  /* Tells the server about this user's bookings (idempotent; only changes are sent). */
-  /* What the server needs to know about my booking on one flight. */
-  const paxBody = (t, s, seat) => {
-    const stu = studentTrip(t);
-    return {
-      seg: segOut(s), cabin: t.cabin,
-      student: stu ? { uni: SZ.universityFromEmail(user.verified.email), share: Boolean(t.showUni) } : null,
-      seat: stu ? null : seat || null, locked: stu && seat ? seat : null,
-      active: t.status === 'Confirmed',
-    };
-  };
   const liveAccount = () => LIVE.on && user && session() && !isLocalAccount();
-  function liveSync() {
-    if (!liveAccount()) return;
-    clearTimeout(LIVE.timer);
-    LIVE.timer = setTimeout(() => {
-      // One record per flight: if several bookings are on the same flight, the active (student) one wins.
-      const rank = (t) => (t.status === 'Confirmed' ? 2 : 0) + (studentTrip(t) ? 1 : 0);
-      const best = {};
-      trips.forEach((t) => t.segments.forEach((s, i) => {
-        const id = liveId(s);
-        if (!best[id] || rank(t) > rank(best[id].t)) best[id] = { t, s };
-      }));
-      Object.values(best).forEach(({ t, s }) => {
-        if (new Date(s.dep) < new Date()) return;
-        const id = liveId(s), body = paxBody(t, s, studentTrip(t) && !t.checkedIn ? s.pick || null : s.seat);
-        const k = JSON.stringify(body);
-        if (LIVE.sent[id] === k) return;
-        LIVE.sent[id] = k;
-        liveCall('/flights/' + id + '/pax', body).then((r) => { if (r.ok) liveWatch(id); else delete LIVE.sent[id]; if (r.studentDenied) toast(r.studentDenied); });
-      });
-    }, 120);
-  }
-  /* The planner can open any flight, even one this user isn't on. */
-  function liveEnsure(s) {
-    const id = liveId(s);
-    if (!LIVE.on || LIVE.state[id] || LIVE.sent['ensure' + id]) return;
-    LIVE.sent['ensure' + id] = '1';
-    liveCall('/flights/' + id + '/ensure', { seg: segOut(s) }).then((r) => { if (r.ok) { liveWatch(id); liveRerender(); } });
-  }
   /* Nearby dates (±3 days) whose flights already have the most students (bands only: 3+, 5+, 10+). Students only. */
   function studentDates(from, to, date) {
     if (!LIVE.on || !isStudent()) return null;
@@ -410,76 +358,71 @@
     return LIVE.flights[k] && LIVE.flights[k].loading ? null : generateFlights(from, to, date, cabin);
   }
 
-  /* Re-runs the student seat planner for one flight with every seat sold so far, and remembers the
-   * result so students only move when a seat planned for them is bought. */
-  /* Privacy: other passengers appear only as "Student", with a university only if they chose to share it. */
-  const uniTagOf = (u) => (u ? 'u' + hash(String(u).toLowerCase()).toString(36) : '');
-  const myPid = (flightId) => 'p' + hash(user.id + '|' + flightId).toString(36); // my pseudonym on a shared flight (same as the server's)
-  function decorate(p) {
-    p.students.forEach((x) => {
-      if (x.shownUni === undefined) x.shownUni = x.me ? x.uni : x.share ? x.uni : '';
-      x.tag = x.uniTag || uniTagOf(x.uni);
-    });
-    p.groups.forEach((g) => { g.sameUni = g.members.length > 1 && g.members.every((m) => m.tag === g.members[0].tag); });
-    return p;
-  }
-  const uniLabel = (x) => (x && x.shownUni ? x.shownUni : 'university not shared');
-  function nearText(nb) {
-    const shown = nb.filter((x) => x.shownUni);
-    return `${nb.length === 1 ? 'a student' : nb.length + ' students'}${shown.length ? ' · ' + shown.map((x) => 'one from ' + esc(x.shownUni)).join(', ') : ''}`;
-  }
-
-  /* Re-runs the student seat planner for one flight (Economy) with every seat sold so far, and remembers the
-   * result so students only move when a seat planned for them is bought. */
-  function seatPlan(t, i) {
-    const s = t.segments[i], key = SZ.flightKey(s);
-    const st = LIVE.on && LIVE.state[liveId(s)];
-    if (st) { // shared state: other phones' passengers (pseudonymous) and the server's plan
-      const mine = studentTrip(t), pid = user ? myPid(st.id) : '';
-      let real = st.pax.filter((x) => x.student).map((x) => ({ id: x.id, me: x.id === pid, name: 'Student', uni: x.uni || x.uniTag, uniTag: x.uniTag, share: x.share, shownUni: x.share ? x.uni : '', year: '', field: '', locked: x.locked }));
-      if (mine) {
-        const myUni = SZ.universityFromEmail(user.verified.email);
-        real = real.map((x) => (x.me ? { ...x, uni: myUni, shownUni: myUni } : x));
-        if (!real.some((x) => x.me)) real.push({ id: pid, me: true, name: user.firstName, uni: myUni, uniTag: uniTagOf(myUni), shownUni: myUni, year: '', field: '', locked: t.checkedIn ? s.seat : s.pick || null });
-      } else real = real.filter((x) => !x.me);
-      const sold = st.sales.concat(st.pax.filter((x) => !x.student && x.seat && x.id !== pid && (x.cabin || 'Economy') === 'Economy').map((x) => x.seat));
-      if (!mine && s.seat && t.cabin === 'Economy') sold.push(s.seat);
-      const p = SZ.plan(s, { real, sold, fixed: st.plan, prev: LIVE.seen[st.id] || st.plan });
-      if (p.seatOf[pid]) p.seatOf.me = p.seatOf[pid];
-      p.live = st;
-      return decorate(p);
+  /* ---------- seats: views from the seating service, live over Server-Sent Events ---------- */
+  const SEAT = { views: {}, es: {}, sent: {}, timer: null };
+  const seatView = (s) => SEAT.views[liveId(s)] || null;
+  /* Another account signs in (or out): forget the previous account's seat views and streams. */
+  function seatReset() { Object.values(SEAT.es).forEach((es) => es && es.close && es.close()); Object.assign(SEAT, { views: {}, es: {}, sent: {} }); clearTimeout(SEAT.timer); }
+  function applySeat(v) {
+    const old = SEAT.views[v.fid];
+    if (old && old.v > v.v) return; // an older update never overwrites a newer one
+    SEAT.views[v.fid] = v;
+    if (old && JSON.stringify(old) !== JSON.stringify(v)) {
+      liveRerender();
+      if (old.me.seat !== v.me.seat && v.me.seat && route()[0] !== 'seats') flashTick(`Your seat is now ${v.me.seat}`);
     }
-    if (LIVE.on) liveEnsure(s);
-    const me = studentTrip(t)
-      ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : s.pick || null }
-      : null;
-    const sold = [...(store.get('sales', {})[key] || [])];
-    if (!me && s.seat && t.cabin === 'Economy') sold.push(s.seat);
-    const plans = store.get('seatplans', {});
-    const p = SZ.plan(s, { me, sold, prev: plans[key] });
-    plans[key] = p.seatOf;
-    store.set('seatplans', plans);
-    return decorate(p);
   }
+  async function seatCall(method, fid, path, body) {
+    const r = await authCall(method, `/seating/flights/${fid}${path}`, body);
+    if (r.view) { applySeat(r.view); liveRerender(); }
+    return r;
+  }
+  async function seatWatch(fid) {
+    if (SEAT.es[fid] || !window.EventSource) return;
+    SEAT.es[fid] = 'opening';
+    const r = await authCall('GET', `/seating/flights/${fid}/ticket`);
+    if (!r.ok) { delete SEAT.es[fid]; return; }
+    const es = SEAT.es[fid] = new EventSource(`${API}/api/seating/flights/${fid}/stream?ticket=${r.ticket}`);
+    es.onmessage = (e) => { try { applySeat(JSON.parse(e.data)); } catch {} };
+    es.addEventListener('gone', () => { es.close(); delete SEAT.es[fid]; delete SEAT.views[fid]; liveRerender(); });
+    es.onerror = () => { if (es.readyState === 2) { delete SEAT.es[fid]; setTimeout(() => SEAT.sent[fid] && seatWatch(fid), 3000); } }; // tickets are single-use: get a new one
+  }
+  /* What the server needs to know about my booking on one flight. Student status, the university and seats are
+   * NOT sent: the server works them out from the account. */
+  const bookingBody = (t, s) => ({ seg: segOut(s), cabin: t.cabin, fare: t.cabin === 'Economy' ? s.fare || t.fare || 'Essential' : null, ref: t.ref,
+    studentSeating: t.cabin === 'Economy' && t.studentSeat === true, showUni: Boolean(t.showUni) });
+  /* Registers this account's bookings with the seating service (idempotent; only changes are sent). */
+  function seatSync() {
+    if (!liveAccount()) return;
+    clearTimeout(SEAT.timer);
+    SEAT.timer = setTimeout(() => {
+      const rank = (t) => (t.status === 'Confirmed' ? 2 : 0) + (t.studentSeat === true ? 1 : 0);
+      const best = {};
+      trips.forEach((t) => t.segments.forEach((s) => {
+        if (new Date(s.dep) < new Date()) return;
+        const id = liveId(s);
+        if (!best[id] || rank(t) > rank(best[id].t)) best[id] = { t, s };
+      }));
+      const cancel = (id) => { SEAT.sent[id] = 'cancelled'; authCall('DELETE', `/seating/flights/${id}/booking`); if (SEAT.es[id] && SEAT.es[id].close) SEAT.es[id].close(); delete SEAT.es[id]; delete SEAT.views[id]; };
+      Object.keys(SEAT.sent).forEach((id) => { if (!best[id] && SEAT.sent[id] !== 'cancelled') cancel(id); }); // bookings removed on this device
+      Object.values(best).forEach(({ t, s }) => {
+        const id = liveId(s);
+        if (t.status !== 'Confirmed') { if (SEAT.sent[id] !== 'cancelled') cancel(id); return; }
+        const body = bookingBody(t, s), k = JSON.stringify(body);
+        if (SEAT.sent[id] === k) return;
+        SEAT.sent[id] = k;
+        seatCall('PUT', id, '/booking', body).then((r) => {
+          if (!r.ok) { delete SEAT.sent[id]; if (r.status === 409) toast(r.error); return; }
+          seatWatch(id);
+          if (r.studentDenied && t.studentSeat) toast(r.studentDenied);
+        });
+      });
+    }, 120);
+  }
+  const nearbyText = (nb) => (!nb || !nb.students ? '' : `${nb.students === 1 ? 'a student' : nb.students + ' students'}${nb.unis.length ? ' · ' + nb.unis.map((u) => 'one from ' + esc(u)).join(', ') : ''}`);
 
-  /* Seat map state for my cabin: layout, taken seats (other passengers) and, in Economy, the student plan. */
-  function seatState(t, i) {
-    const s = t.segments[i];
-    if (t.cabin === 'Economy') {
-      const p = seatPlan(t, i), taken = new Set([...p.paid].filter((id) => id !== s.seat));
-      Object.entries(p.at).forEach(([id, x]) => { if (!x.me && x.locked) taken.add(id); }); // seats only planned for students stay on sale
-      return { c: p.cabin, p, taken };
-    }
-    const c = SZ.cabin(s, t.cabin), taken = new Set(SZ.paidSeats(s, t.cabin));
-    const st = LIVE.on && LIVE.state[liveId(s)];
-    if (st) st.pax.forEach((x) => { if (x.seat && x.cabin === t.cabin && x.id !== myPid(st.id)) taken.add(x.seat); });
-    else if (LIVE.on) liveEnsure(s);
-    taken.delete(s.seat);
-    return { c, p: null, taken };
-  }
   /* Economy Light: seat choice is a paid extra unless unlocked for this flight (student points or Asia Miles). */
   const seatUnlocked = (t, i) => (perks().seatBuys || []).some((b) => b.ref === t.ref && b.i === i);
-  const seatLocked = (t, i) => seatRule(t.cabin, t.segments[i].fare || t.fare) === 'paid' && !seatUnlocked(t, i);
 
   /* Shown in the booking form and on the trip page when the user isn't a verified adult student. */
   function studentGate(iso) {
@@ -497,15 +440,19 @@
   function studentCard(t) {
     if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
     if (!studentEligible(t)) return studentGate(t.segments[0].dep); // the seating planner is a student feature
-    const planner = plannerAllowed(t, 0) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See student seating on this flight</a>` : '';
-    const seated = studentTrip(t) && t.checkedIn ? t.segments.map((s, i) => {
-      const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
-      return nb.length ? `<p class="sm" style="margin:0">${esc(s.number)} · seat ${esc(s.seat)}, next to ${nearText(nb)}</p>` : '';
+    const planner = studentTrip(t) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">${icon('cap')} Your student seat &amp; seating preferences</a>` : '';
+    // What the seating server says about my Student Zone seat on each flight (nothing about anyone else).
+    const zoneLines = studentTrip(t) && liveAccount() ? t.segments.map((s) => {
+      const v = seatView(s);
+      if (!v || !v.me.student) return '';
+      const nb = v.me.nearby && v.me.nearby.students ? `, next to ${nearbyText(v.me.nearby)}` : '';
+      return `<p class="sm" style="margin:0">${esc(s.number)} · ${v.me.seat && v.me.alloc === 'assigned' ? `Student seat <b>${esc(v.me.seat)}</b>${nb}` : esc(v.me.notice)}</p>`;
     }).join('') : '';
+    const seated = zoneLines;
     return `
     <div class="card sz-card">
       ${verifiedLabel()}
-      ${t.checkedIn ? seated : t.studentSeat === undefined ? seatPoll(undefined, t.ref) : seatChoice(t.studentSeat, t.ref)}
+      ${t.checkedIn ? seated : (t.studentSeat === undefined ? seatPoll(undefined, t.ref) : seatChoice(t.studentSeat, t.ref)) + (t.studentSeat ? seated : '')}
       ${adapterHint(t)}
       ${tripRewardsCard(t)}
       ${planner}
@@ -534,7 +481,7 @@
     const t = ref && findTrip(ref);
     const share = !yes ? '' : `<label class="check sm share-row"><input type="checkbox" ${ref ? `class="share-uni" data-ref="${ref}"` : 'name="szShowUni"'} ${t && t.showUni ? 'checked' : ''}> Show my university to students seated near me <span class="muted">(never your name)</span></label>`;
     return `<div class="sz-choice ${yes ? 'yes' : 'no'}">
-      <span>${yes ? 'Student seating selected · your seat will be assigned at check-in' : 'Standard seating selected'}</span>
+      <span>${yes ? 'Student seating selected · we seat you next to students, free on every fare' : 'Standard seating selected'}</span>
       <button type="button" class="link-btn" ${change}>Change</button></div>${share}${ref ? '' : `<input type="hidden" name="szSeat" value="${yes ? 'yes' : 'no'}">`}`;
   }
 
@@ -552,8 +499,8 @@
   /* spRate: student points per Asia Mile a normal member would earn. spConvert: share converted to
    * Asia Miles at graduation (rest expires). With ~85% of students converting, Cathay pays
    * 1.5 × 0.70 × 0.85 ≈ 0.89 of normal miles while students get 1.05× (break-even up to 95% converting). */
-  const PERKS = { referralCap: 10, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500, inviteAlpha: 0.2, inviteStudentShare: 0.25, parentBonus: 0.2, parentBags: 1, parentMax: 2, gradWindowMonths: 18 };
-  /* Parent Pass: a verified student invites up to 2 parents. A parent's trips include +1 checked bag (23 kg) and a free
+  const PERKS = { referralCap: 5, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500, inviteAlpha: 0.2, inviteStudentShare: 0.25, parentBonus: 0.2, parentBags: 1, parentMax: 2, gradWindowMonths: 18 };
+  /* Companion Pass: a verified student invites up to 2 parents. A parent's trips include +1 checked bag (23 kg) and a free
    * date change; their first booked trip earns a welcome bonus of 20% of the flight's Asia Miles (same rule as invites).
    * Valid while the student is verified and 6 months after (the graduation trip). Parents get no student features. */
   /* Invites: when the invited friend makes their first booking (cancelled bookings don't count), BOTH sides get a bonus.
@@ -649,7 +596,7 @@
     const inv = refsCache.invited;
     if (inv && inv.booking) out.push({ ...inviteBonus(inv.booking), title: 'Your first flight with an invite', date: inv.booking.bought, note: 'Invite bonus' });
     const pp = refsCache.parentPass;
-    if (pp && pp.active && pp.booking) out.push({ amount: Math.round(bookingMiles(pp.booking) * PERKS.parentBonus), unit: 'miles', title: 'Parent Pass: first-visit welcome bonus', date: pp.booking.bought, note: `Invited by ${pp.student}` });
+    if (pp && pp.active && pp.booking) out.push({ amount: Math.round(bookingMiles(pp.booking) * PERKS.parentBonus), unit: 'miles', title: 'Companion Pass: first-visit welcome bonus', date: pp.booking.bought, note: `Invited by ${pp.student}` });
     return out;
   }
   const inviteSp = () => inviteCredits().filter((c) => c.unit === 'pts').reduce((n, c) => n + c.amount, 0);
@@ -824,6 +771,7 @@
       <div class="g2 mid" style="margin-top:20px">
         <section class="card companion"><h3>Already booked?</h3><p class="sub" style="margin-bottom:16px">Find your booking with its reference and your family name.</p>
           <a class="btn btn-primary" href="#/retrieve">Manage booking</a></section>
+        <a class="card companion discover-link" href="landing.html"><h3>${icon('cap')} Cathay Student</h3><p class="muted">Studying at university? Discover how your membership grows with you.</p></a>
         <section class="card companion"><h3>Join Cathay</h3><p class="sub" style="margin-bottom:16px">Create a free account to book, check in online and earn Asia Miles on every flight.</p>
           <div class="row gap-sm"><a class="btn btn-primary" href="#/signup">Create account</a><a class="btn btn-ghost" href="#/signin">Sign in</a></div></section>
       </div></div>`;
@@ -836,7 +784,7 @@
       <a class="link" href="#/rewards">Points &amp; rewards${icon('ext')}</a></section>`;
   }
   /* Gentle, dismissible guide towards student verification. */
-  const studentBanner = () => `<a class="banner student-banner" href="#/discover">${icon('cap')}<span><b>University student?</b><br><span class="muted sm">Verify with your university email and student ID to unlock student seating, student points and perks.</span></span>${icon('arrow')}</a>`;
+  const studentBanner = () => `<a class="banner student-banner" href="landing.html">${icon('cap')}<span><b>University student?</b><br><span class="muted sm">Verify with your university email and student ID to unlock student seating, student points and perks.</span></span>${icon('arrow')}</a>`;
   /* Where the member is in student verification, with the next step (home pages). '' when there's nothing to do. */
   function verifyNotice() {
     if (!user) return '';
@@ -857,7 +805,7 @@
     return `<div class="home ${next ? '' : 'noflight'}">
       <header class="pagehead"><div><p class="crumb">Overview</p><h1><span class="g">${greet},</span> <span class="n">${esc(user.firstName)}</span></h1>
         <p class="sub">Your trips and Asia Miles in one place.</p></div></header>
-      ${(fetchRefs(), parentPassActive()) ? `<div class="banner parent-banner">${icon('heart')}<span><b>Parent Pass from ${esc(refsCache.parentPass.student)}</b><br><span class="muted sm">Your trips include +${PERKS.parentBags} checked bag and a free date change; your first trip earns a welcome bonus. Valid until ${esc(refsCache.parentPass.until || 'their graduation')}.</span></span></div>` : verifyNotice() || studentBanner()}
+      ${(fetchRefs(), parentPassActive()) ? `<div class="banner parent-banner">${icon('heart')}<span><b>Companion Pass from ${esc(refsCache.parentPass.student)}</b><br><span class="muted sm">${refsCache.parentPass.booking ? `Used for your visit (${esc(refsCache.parentPass.booking.segments[0].from)} → ${esc(refsCache.parentPass.booking.segments[refsCache.parentPass.booking.segments.length - 1].to)}). The pass covers one visit during their studies.` : `One visit during their studies: +${PERKS.parentBags} checked bag, a free date change and a welcome bonus on the trip you book. Valid until ${esc(refsCache.parentPass.until || 'their graduation')}.`}</span></span></div>` : verifyNotice() || studentBanner()}
       <div class="g2">${milesCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
       ${quickBookCard()}
       <div class="sect-head" style="margin-top:20px"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(activity()[0])}
@@ -879,7 +827,7 @@
             <li>${icon('plug')}<span><b>Free plug adapter</b> on your first flight to your university's country</span></li>
           </ul>
           <a class="btn btn-primary block" href="#/verify" data-action="modal-close">Verify my student status</a>
-          <a class="btn btn-ghost block" href="#/discover" data-action="modal-close">Discover student benefits</a>
+          <a class="btn btn-ghost block" href="landing.html">Discover student benefits</a>
           <button class="link-btn block-link" data-action="modal-close">Not now</button>
         </div>
       </div>`);
@@ -897,10 +845,10 @@
           ['up', 'Student points', 'Earn 1.5 student points per mile on your flights. Spend them on Wi-Fi, seats and lounges; 70% of what is left becomes Asia Miles at graduation.'],
           ['plug', 'Free travel adapter', "On your first flight to your university's country, handed to you by the crew. Once per study programme."],
           ['share', 'Invite friends', `When a friend joins with your link and books their first flight, you both get a bonus: ${Math.round(PERKS.spRate * PERKS.inviteStudentShare * 1000) / 1000} student points per mile for students, ${Math.round(PERKS.inviteAlpha * 100)}% of the flight's Asia Miles otherwise.`],
-          ['heart', 'Parent Pass', `Invite up to ${PERKS.parentMax} parents: +1 bag, a free date change and a welcome bonus on their trips to visit you, valid until 6 months after you graduate.`],
+          ['heart', 'Companion Pass', `Invite up to ${PERKS.parentMax} parents: each gets one visit during your studies with +1 bag, a free date change and a welcome bonus, valid until 6 months after you graduate.`],
           ['cap', 'Graduation gift', `${Math.round(PERKS.spConvert * 100)}% of your student points become Asia Miles, plus one tier up for ${PERKS.boostMonths} months if you flew Cathay in your last ${PERKS.gradWindowMonths} months as a student.`],
           ['chat', 'Student flight chat', 'A moderated group chat for verified students on your flight, open 7 days before departure. Group only, no private messages.'],
-          ['tag', 'Student card (proposed)', 'A student card with our card partner: no income requirement, earns student points on everyday spending, upgrades at graduation. Concept only, not available.'],
+          ['tag', 'Student bank account', 'Open a student account with Cathay\'s partner bank and earn student points on your everyday purchases, not just on flights.'],
         ].map(([ic, h, p]) => `<div class="card disc">${icon(ic)}<h3>${h}</h3><p class="muted sm">${p}</p></div>`).join('')}
       </div>
       <div class="row gap-sm">${user ? (user.verified ? `<a class="btn btn-primary" href="#/rewards">See my student perks</a>` : `<a class="btn btn-primary" href="#/verify">Verify my student status</a>`) : `<a class="btn btn-primary" href="#/signup">Create an account</a>`}
@@ -928,6 +876,7 @@
       ${verifyNotice()}
       <div class="g2">${pointsCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
       ${quickBookCard()}
+      ${bankAd()}
       <div class="sect d-only"><h2>Made for your next journey</h2><p class="sub">Student-only tools, ready when you are.</p></div>
       <div class="sect m-only"><h2>Your flight companion</h2>${next ? '<p class="sub">Your personal trip support</p>' : ''}</div>
       <div class="g2 mid">${companionCard(next)}<div class="rcol">${exclCard(next)}${quickLinks()}</div></div>
@@ -951,9 +900,9 @@
       ${rows}
     </div>`;
   }
-  /* ---------- Parent Pass (student side; parents only see a banner and get their benefits automatically) ---------- */
+  /* ---------- Companion Pass (student side; parents only see a banner and get their benefits automatically) ---------- */
   const PARENT_DEALS = [
-    ['bag', `+${PERKS.parentBags} checked bag (23 kg)`, 'on every Parent Pass trip', 'Low marginal cost, high perceived value'],
+    ['bag', `+${PERKS.parentBags} checked bag (23 kg)`, 'on your Companion Pass visit', 'Low marginal cost, high perceived value'],
     ['calendar', 'Free date change', 'book the graduation trip early, adjust later', 'Early bookings; flexible dates fill low-load flights'],
     ['gift', 'First-visit welcome bonus', `${Math.round(PERKS.parentBonus * 100)}% of the first trip's Asia Miles`, 'Paid only on a booked trip'],
     ['heart', 'Student pays it back', "use your own miles for their ticket (add them as redemption nominees)", 'Uses miles already earned'],
@@ -973,12 +922,12 @@
     fetchRefs();
     const r = refsCache || {}, list = r.parents || [], max = r.parentMax || PERKS.parentMax, nudge = parentNudge();
     const rows = list.map((x) => `<div class="perk-row"><div><b>Parent ${esc(x.name)}</b><div class="muted sm">Joined ${fmtDate(x.joined + 'T12:00', { day: 'numeric', month: 'short' })} · ${x.booking ? `booked ${esc(x.booking.segments[0].from)} → ${esc(x.booking.segments[x.booking.segments.length - 1].to)}` : 'no trip booked yet'}</div></div>
-      <span class="badge${x.booking ? ' ok' : ''}">${x.booking ? 'Parent Pass trip booked' : 'Member'}</span></div>`).join('');
+      <span class="badge${x.booking ? ' ok' : ''}">${x.booking ? 'Companion Pass trip booked' : 'Member'}</span></div>`).join('');
     return `<div class="card perk parent-pass" id="parentCard">
-      <div class="perk-head">${icon('heart')}<div><h3>Parent Pass</h3><p class="muted sm">Graduation is the one trip parents almost never miss. Invite up to ${max} parents: their trips come with extras, valid while you study and for 6 months after you graduate. <button type="button" class="link-btn" data-action="parent-info" data-who="student">Why it's worth it</button></p></div></div>
+      <div class="perk-head">${icon('heart')}<div><h3>Companion Pass</h3><p class="muted sm">Graduation is the one trip parents almost never miss. Invite up to ${max} parents: each gets one visit with extras during your studies, valid while you study and for 6 months after you graduate. <button type="button" class="link-btn" data-action="parent-info" data-who="student">Why it's worth it</button></p></div></div>
       ${nudge ? `<div class="sz-choice yes"><span>${icon('calendar')} ${esc(nudge)}</span></div>` : ''}
       <div class="pp-deals">${PARENT_DEALS.map(([ic, h, s]) => `<div>${icon(ic)}<b>${h}</b><span class="muted sm">${s}</span></div>`).join('')}</div>
-      ${list.length < max ? (isLocalAccount() ? '<p class="muted sm">Parent Pass needs an online account.</p>' : `<div class="ref-link"><span class="mono">${esc(parentLink())}</span><button class="btn btn-primary sm-btn" data-action="parent-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>`) : `<p class="muted sm">You've invited ${max} parents (the maximum).</p>`}
+      ${list.length < max ? (isLocalAccount() ? '<p class="muted sm">Companion Pass needs an online account.</p>' : `<div class="ref-link"><span class="mono">${esc(parentLink())}</span><button class="btn btn-primary sm-btn" data-action="parent-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>`) : `<p class="muted sm">You've invited ${max} parents (the maximum).</p>`}
       ${rows}
       <p class="muted sm">Parents become regular Cathay members. They don't get student features and never see your chats or seats.</p>
     </div>`;
@@ -990,12 +939,12 @@
     document.body.insertAdjacentHTML('beforeend', `
       <div class="modal-bg" data-action="modal-close">
         <div class="modal promo" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="ppTitle">
-          <div class="promo-hero"><span class="promo-badge">${icon('heart')} Parent Pass</span>
+          <div class="promo-hero"><span class="promo-badge">${icon('heart')} Companion Pass</span>
             <h2 id="ppTitle">${parent ? 'Your student invited you' : 'Bring your parents to your graduation'}</h2>
-            <p>${parent ? 'Create a free Cathay account: your trips to visit your student come with extras.' : 'Almost every student living away gets a parent visit. Parent Pass makes that trip easy, and makes it a Cathay trip.'}</p></div>
+            <p>${parent ? 'Create a free Cathay account: one visit to your student comes with extras.' : 'Almost every student living away gets a parent visit. Companion Pass makes that trip easy, and makes it a Cathay trip.'}</p></div>
           <ul class="promo-list">
             ${PARENT_DEALS.map(([ic, h, s]) => `<li>${icon(ic)}<span><b>${h}</b>: ${s}.</span></li>`).join('')}
-            <li>${icon('calendar')}<span><b>Valid</b> while ${parent ? 'your student is' : "you're"} a verified student and 6 months after graduation, so the graduation trip is covered.</span></li>
+            <li>${icon('calendar')}<span><b>One visit</b> per parent during the studies, valid while ${parent ? 'your student is' : "you're"} a verified student and 6 months after graduation, so the graduation trip is covered.</span></li>
             ${parent ? `<li>${icon('shield')}<span>No passport scan or extra checks to join. You won't see your student's chats or seats.</span></li>` : `<li>${icon('up')}<span><b>For you:</b> up to ${PERKS.parentMax} parents. They join as regular members and never see your chats or seat.</span></li>`}
           </ul>
           ${parent && !user ? '<a class="btn btn-primary block" href="#/signup" data-action="modal-close">Create my account</a>' : '<button class="btn btn-primary block" data-action="modal-close">Got it</button>'}
@@ -1005,6 +954,8 @@
     $('.modal.promo .btn').focus();
   }
   const parentPassActive = () => Boolean(refsCache && refsCache.parentPass && refsCache.parentPass.active);
+  /* One Companion Pass visit per parent for the whole study programme: available until that trip is booked. */
+  const parentPassAvailable = () => parentPassActive() && !refsCache.parentPass.booking;
 
   /* Explains the invite rules. who: 'inviter' (my link) or 'invited' (I came through a friend's link). */
   function inviteInfo(who) {
@@ -1045,6 +996,19 @@
     inviteObs.observe(card);
   }
 
+  /* Partner bank offer, shown to verified students only (a marketing moment unlocked by the student status). */
+  const bankAd = () => (!isStudent() ? '' : `<div class="card bank-ad">
+      <span class="ad-tag">Partner offer</span>
+      <div class="bank-head">${icon('tag')}<div><h3>Your student bank account</h3><p>Open a student account with Cathay's partner bank and turn everyday spending into flights.</p></div></div>
+      <ul class="bank-list">
+        <li>${icon('check')} Earn student points on daily purchases: coffee, groceries, transport</li>
+        <li>${icon('check')} Made for verified students: no income requirement</li>
+        <li>${icon('check')} Debit card first, so you stay in control</li>
+        <li>${icon('check')} Your points keep growing after graduation</li>
+      </ul>
+      <button class="btn btn-primary sm-btn" data-action="bank-ad">Open a student account</button>
+    </div>`);
+
   /* Overview: book a flight without leaving the page first. */
   function quickBookCard() {
     return `<form id="quickBook" class="card quick-book">
@@ -1065,8 +1029,7 @@
       <div class="row between"><span class="lab">${isStudent() ? 'Student member' : 'Member'}</span>${currentTier() !== user.tier ? `<span class="tier">${esc(currentTier())} · graduation gift</span>` : ''}</div>
       <div class="member-name">${esc(user.firstName)} ${esc(user.lastName)}${user.verified ? ' ' + tick() : ''}</div>
       <div class="mono">${esc(user.memberId)}</div>
-      <div class="row between stats"><div><span class="lab">Student points</span><b>${pts(spLeft(perks()))}</b></div>
-        <div><span class="lab">Asia Miles</span><b>${pts(asiaMiles())}</b></div>
+      <div class="row between stats">${isStudent() ? `<div><span class="lab">Student points</span><b>${pts(spLeft(perks()))}</b></div>` : `<div><span class="lab">Asia Miles</span><b>${pts(asiaMiles())}</b></div>`}
         <div><span class="lab">Earned this month</span><b>+${pts(earnedThisMonth())}</b></div></div>
     </div>`;
   }
@@ -1189,13 +1152,13 @@
         <label class="field"><span>Family name</span><input name="last${i}" required value="${i === 0 && user ? esc(user.lastName) : ''}"></label>
       </div>`).join('');
     const flightLine = (f) => `<div class="sum-row"><b>${f.number}</b><span>${city(f.from)} → ${city(f.to)}</span><span>${fmtDate(f.dep, { weekday: 'short', day: 'numeric', month: 'short' })} · ${fmtTime(f.dep)}</span></div>
-      <div class="sum-row sm"><span class="muted">${esc(fareName(s.cabin, f.fare))}</span><span class="${seatRule(s.cabin, f.fare) === 'paid' ? 'warn' : 'muted'}">${seatRule(s.cabin, f.fare) === 'paid' ? `Seat selection: extra (${PERKS.seatSp.toLocaleString()} student points or ${PERKS.seatMiles.toLocaleString()} Asia Miles)` : 'Seat selection included'}</span></div>`;
+      <div class="sum-row sm"><span class="muted">${esc(fareName(s.cabin, f.fare))}</span><span class="${seatRule(s.cabin, f.fare) === 'paid' ? 'warn' : 'muted'}">${seatRule(s.cabin, f.fare) === 'paid' ? `Seat selection: extra (${isStudent() ? PERKS.seatSp.toLocaleString() + ' student points' : PERKS.seatMiles.toLocaleString() + ' Asia Miles'})` : 'Seat selection included'}</span></div>`;
     return `
     <div class="narrow">
       ${backLink('#/results', 'Back to flights')}
       <h1>Review & pay</h1>
       <div class="card">${flightLine(s.out)}${s.back ? flightLine(s.back) : ''}
-        ${parentPassActive() ? `<div class="sum-row sm"><span>${icon('heart')} Parent Pass</span><b>+${PERKS.parentBags} checked bag (23 kg) · free date change</b></div>` : ''}
+        ${parentPassAvailable() ? `<div class="sum-row sm"><span>${icon('heart')} Companion Pass</span><b>+${PERKS.parentBags} checked bag (23 kg) · free date change</b></div>` : ''}
         <hr><div class="sum-row"><span>Fare (${s.pax} × ${esc(s.cabin)})</span><b>${money(fare)}</b></div>
         <div class="sum-row"><span>Taxes & charges</span><b>${money(taxes)}</b></div>
         <div class="sum-row total"><span>Total</span><b>${money(fare + taxes)}</b></div></div>
@@ -1204,7 +1167,7 @@
         ${s.cabin === 'Economy' ? (studentOk(s.out.dep) ? `<div class="sz-card card">${verifiedLabel()}<div class="sz-choice-wrap">${seatPoll()}</div></div>` : studentGate(s.out.dep)) : ''}
         <label class="field"><span>Contact email</span><input type="email" name="email" required value="${user ? esc(user.email) : ''}"></label>
         <label class="field"><span>Payment</span><input value="Demo card •••• 4242 (no real payment)" disabled></label>
-        <button class="btn btn-primary block" type="submit">Confirm booking · ${money(fare + taxes)}</button>
+        <button class="btn btn-primary block" type="submit">${liveAccount() && seatRule(s.cabin, s.out.fare) === 'free' ? `Continue: choose your seat · ${money(fare + taxes)}` : `Confirm booking · ${money(fare + taxes)}`}</button>
       </form>
     </div>`;
   };
@@ -1243,7 +1206,7 @@
           ? t.segments.map((s, i) => `<a class="btn btn-primary block" href="#/boarding/${t.ref}/${i}">Boarding pass · ${s.from} → ${s.to}</a>`).join('')
           : canCheckIn(t)
             ? `<button class="btn btn-primary block" data-action="checkin" data-ref="${t.ref}">${studentTrip(t) ? 'Check in · get your seat' : t.cabin === 'Economy' ? 'Check in & choose seat' : 'Check in online'}</button>`
-            : `<div class="card empty sm">Online check-in opens 48 hours before departure.</div>`}
+            : `<div class="card empty sm">Online check-in opens 48 hours before departure.</div>${advanceSeatButton(t)}`}
         <button class="btn btn-danger block" data-action="cancel" data-ref="${t.ref}">Cancel booking</button></div>` : ''}
     </div>`;
   };
@@ -1255,8 +1218,8 @@
     if (!t.checkedIn) return redirect('#/trip/' + ref);
     const seed = ref + idx;
     const p = t.pax[0];
-    const plan = studentTrip(t) ? seatPlan(t, Number(idx)) : null;
-    const me = plan && plan.students.find((x) => x.me), nb = me ? plan.neighboursOf(me) : [];
+    const v = studentTrip(t) && liveAccount() ? seatView(s) : null;
+    const me = v && v.me.student, nb = v && v.me.nearby;
     return `
     <div class="narrow">
       ${backLink('#/trip/' + ref, 'Back to trip')}
@@ -1270,8 +1233,8 @@
           <div><span>Gate</span><b>${gateFor(seed)}</b></div><div><span>Terminal</span><b>${termFor(seed)}</b></div>
           <div><span>Seat</span><b>${esc(s.seat)}</b></div><div><span>Group</span><b>${t.cabin === 'Economy' ? '4' : '1'}</b></div>
         </div>
-        ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nearText(nb) : 'Student seating'}</div>` : ''}
-        ${t.parentPass ? `<div class="pass-zone">${icon('heart')} Parent Pass · +${PERKS.parentBags} checked bag (23 kg)</div>` : ''}
+        ${me ? `<div class="pass-zone">${icon('cap')} Student seating${nb && nb.students ? ' · next to ' + nearbyText(nb) : ''}</div>` : ''}
+        ${t.parentPass ? `<div class="pass-zone">${icon('heart')} Companion Pass · +${PERKS.parentBags} checked bag (23 kg)</div>` : ''}
         ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(REWARDS.find((x) => x.id === r.id).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
         ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
@@ -1281,152 +1244,176 @@
     </div>`;
   };
 
-  let seatCtx = null; // trip, segment index and student seat plan of the open seat map / planner
+  let seatCtx = null; // trip and segment of the open seat map
+  /* Advance seat selection (before check-in opens) for fares that include it: what the server says, never guessed. */
+  function advanceSeatButton(t) {
+    const v = liveAccount() && seatView(t.segments[0]);
+    if (!v || v.me.selection === 'none' || v.me.status === 'checked_in' || v.me.student) return ''; // students: one entry, in the student card
+    const label = v.me.student ? 'Choose your student seat' : v.me.chosen ? `Change seat (${esc(v.me.seat)})` : 'Choose your seat';
+    return `<a class="btn btn-ghost block" href="#/${v.me.student ? 'planner' : 'seats'}/${t.ref}/0">${icon('seat')} ${label} · included in your fare</a>`;
+  }
 
-  /* Economy seat map; cell(id) returns the markup for one seat. */
-  function seatGrid(c, cell) {
-    const aisle = '<span class="aisle"></span>';
+  /* Booking step 3 (fares that include seat selection): choose the seat, then confirm and pay. */
+  function payBar(ref) {
+    const t = findTrip(ref);
+    if (!t || !t.pendingPay) return '';
+    return `<div class="card pay-bar">
+      <div><p class="eyebrow">Booking · last step</p><b>Choose your seat, included in your fare</b><span class="muted sm">${studentTrip(t) ? 'We already placed you next to students; pick another seat if you prefer.' : 'Tap a seat on the map, or skip and get one for free at check-in.'}</span></div>
+      <div class="row gap-sm"><button class="btn btn-ghost sm-btn" data-action="finish-pay" data-ref="${t.ref}" data-skip="1">Skip for now</button>
+      <button class="btn btn-primary sm-btn" data-action="finish-pay" data-ref="${t.ref}">Confirm and pay · ${money(t.total)}</button></div>
+    </div>`;
+  }
+
+  /* Seat map. cell(id) returns the markup for one seat; rows of the Student Zone get a subtle marker. */
+  function seatGrid(c, cell, zone) {
+    const aisle = '<span class="aisle"></span>', inZone = (r) => zone && r >= zone[0] && r <= zone[1];
     const rows = [`<div class="srow letters"><span class="rnum"></span>${c.blocks.map((b) => b.map((L) => `<span class="seat-l">${L}</span>`).join('')).join(aisle)}</div>`];
-    for (let r = c.first; r <= c.last; r++) rows.push(`<div class="srow"><span class="rnum">${r}</span>${c.blocks.map((b) => b.map((L) => cell(r + L)).join('')).join(aisle)}</div>`);
+    for (let r = c.first; r <= c.last; r++) {
+      if (zone && r === zone[0]) rows.push(`<div class="zone-cap" aria-hidden="true"><span>${icon('cap')} Student Zone</span></div>`);
+      rows.push(`<div class="srow${inZone(r) ? ' zrow' : ''}${zone && r === zone[1] ? ' zlast' : ''}"><span class="rnum">${r}</span>${c.blocks.map((b) => b.map((L) => cell(r + L)).join('')).join(aisle)}</div>`);
+    }
     return `<div class="seatmap">${rows.join('')}</div>`;
   }
   /* tip: text for the floating hover panel (student seats); otherwise the native title tooltip. */
   const seatEl = (id, cls, inner = '', action = '', label = '', tip = '') => {
-    const attrs = `data-seat="${id}" aria-label="Seat ${id}${esc(label)}" ${tip ? `data-tip="${esc(id + ' · ' + tip)}"` : `title="${id}${esc(label)}"`}`;
-    return action ? `<button class="seat ${cls}" data-action="${action}" ${attrs}>${inner}</button>` : `<span class="seat ${cls}" ${attrs} tabindex="${tip ? 0 : -1}">${inner}</span>`;
+    const attrs = `data-seat="${id}" aria-label="Seat ${id}${esc(label)}" ${tip ? `data-tip="${esc(id + ' · ' + tip)}" tabindex="0"` : `title="${id}${esc(label)}"`}`;
+    return action ? `<button class="seat ${cls}" data-action="${action}" ${attrs}>${inner}</button>` : `<span class="seat ${cls}" ${attrs}>${inner}</span>`;
   };
   const legend = (items) => `<div class="seat-legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
+  /* One seat from the server's view. 'x' covers taken, blocked AND restricted seats on purpose: nobody can tell why. */
+  function viewCell(v, id, selectable, readOnly) {
+    const st = v.seats[id] || 'x';
+    if (st === 'out') return seatEl(id, 'out', '', '', ', outside the Student Zone');
+    if (st === 'mine') return seatEl(id, 'mine', id.slice(-1), '', ', your seat');
+    if (st === 'held') return seatEl(id, 'mine held', id.slice(-1), '', ', selected, not confirmed yet');
+    // Another student's seat (student viewers only): a star, and their university only if they chose to share it.
+    if (v.studentSeats && id in v.studentSeats) { const u = v.studentSeats[id]; return seatEl(id, 'stu', '★', '', ', student', u ? 'Student · ' + u : 'Student'); }
+    if (st === 'free') return selectable ? seatEl(id, 'free', id.slice(-1), 'pick-seat', ', available') : seatEl(id, readOnly ? 'free' : 'free locked', '', '', ', available');
+    if (st === 'zone') return seatEl(id, 'zone-res', '', '', ', reserved for the Student Zone');
+    return seatEl(id, 'taken', '', '', ', not available');
+  }
+  const SEL_TEXT = { included: 'Seat selection is included in your fare', unlocked: 'Seat selection unlocked for this flight', none: 'Seat selection is not included' };
 
   views.seats = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx), s = t && t.segments[i];
     if (!t || !s) return notFound();
-    if (t.checkedIn || !canCheckIn(t)) return redirect('#/trip/' + ref);
-    const { c, p, taken } = seatState(t, i);
-    const me = p && p.students.find((x) => x.me);
-    seatCtx = { t, i, p, c, taken };
-    const head = `${backLink('#/trip/' + ref, 'Back to trip')}
-      <p class="eyebrow">Check-in · flight ${i + 1} of ${t.segments.length} · ${esc(fareName(t.cabin, s.fare || t.fare))}</p>
-      <h1>${me || seatLocked(t, i) ? 'Your seat' : 'Choose your seat'}</h1>
+    if (t.checkedIn || !isUpcoming(t)) return redirect('#/trip/' + ref);
+    if (!canCheckIn(t) && !liveAccount()) return redirect('#/trip/' + ref);
+    const head = (title) => `${backLink('#/trip/' + ref, 'Back to trip')}
+      <p class="eyebrow">${t.pendingPay ? 'Seat selection' : 'Check-in'} · flight ${i + 1} of ${t.segments.length} · ${esc(fareName(t.cabin, s.fare || t.fare))}</p>
+      <h1>${title}</h1>
       <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)} · ${esc(s.aircraft)} · ${esc(t.cabin)}</p>`;
-
-    if (me && p.seatOf.me) {
-      // Students don't choose: the planner has already put them next to other students (any Economy fare).
-      const mine = p.seatOf.me, nb = p.neighboursOf(me), near = new Set(nb.map((x) => p.seatOf[x.id]));
-      seatSel.seat = mine;
-      const cell = (id) => id === mine ? seatEl(id, 'mine', id.slice(-1), '', ', your seat')
-        : near.has(id) ? seatEl(id, 'stu', '★', '', ', Student · ' + uniLabel(p.at[id]))
-        : p.paid.has(id) || p.at[id] ? seatEl(id, 'taken') : seatEl(id, 'free');
-      return `
-      <div class="narrow wide">${head}
-        <div class="seat-layout">
-          <div>${legend([['lg-mine', 'You'], ['lg-stu', 'Student next to you'], ['lg-taken', 'Taken'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
-          <div class="seat-side">
-            <div class="card sz-card">
-              <p class="eyebrow">We've seated you in</p>
-              <div class="seat-big">${mine}</div>
-              ${nb.length
-                ? `<p class="sm" style="margin:0">Next to ${nearText(nb)}</p>
-                   ${nb.some((x) => x.shownUni && x.tag === me.tag) ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}`
-                : `<p class="sm" style="margin:0">No other student could be seated next to you yet. We keep trying until check-in closes.</p>`}
-              <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Names are never shown; universities only when a student chooses to share theirs.</p>
-            </div>
-            <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">Check in · seat ${mine}</button>
-              ${studentCanPick(t, i) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/${i}">Economy Flex: choose a different seat</a>` : ''}</div>
-          </div>
-        </div>
+    if (!liveAccount()) return offlineSeats(t, i, head);
+    const v = seatView(s);
+    seatCtx = { t, i, v };
+    if (!v) { seatSync(); return `<div class="narrow wide">${head('Your seat')}<div class="card empty">Loading the seat map…</div></div>`; }
+    const me = v.me, selectable = me.selection !== 'none' && me.checkin !== 'closed';
+    if (me.checkin === 'not_open' && !selectable) return redirect('#/trip/' + ref); // nothing to do before check-in
+    const pick = me.hold || me.seat;
+    let side;
+    if (me.student) {
+      side = `<div class="card sz-card">
+        <p class="eyebrow">${icon('cap')} Student seating</p>
+        <div class="seat-big">${pick ? esc(pick) : '—'}</div>
+        ${me.alloc === 'assigned' && me.seat ? (me.nearby && me.nearby.students ? `<p class="sm" style="margin:0">Next to ${nearbyText(me.nearby)}</p>${me.nearby.sameUni ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}` : '<p class="sm" style="margin:0">Your student seat.</p>') : `<p class="sm" style="margin:0">${esc(me.notice)}</p>`}
+        <p class="muted sm" style="margin:8px 0 0">${selectable ? 'Your fare includes seat selection: you can pick another available seat.' : 'Your student seat is assigned for free. Choosing a different seat isn\'t included in Economy Light.'}</p>
       </div>`;
-    }
-
-    if (seatSel.key !== ref + i) { seatSel.key = ref + i; seatSel.seat = s.seat || ''; }
-    const locked = seatLocked(t, i);
-    const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1), locked ? '' : 'pick-seat')
-      : taken.has(id) ? seatEl(id, 'taken')
-      : locked ? seatEl(id, 'free locked')
-      : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
-    const pp = perks(), sp = user.verified ? spLeft(pp) : 0, miles = asiaMiles();
-    const bought = (pp.seatBuys || []).find((x) => x.ref === t.ref && x.i === i);
-    const side = locked
-      ? `<div class="card seat-lock">
-          <p class="eyebrow">${icon('seat')} Economy Light</p>
-          <h3>Seat selection isn't included</h3>
-          <p class="muted sm">We'll assign you a seat for free, or you can unlock seat choice for this flight.</p>
-          <button class="btn btn-primary block sm-btn" data-action="seat-unlock" data-with="sp" ${!user.verified || sp < PERKS.seatSp ? 'disabled' : ''}>Choose my seat · ${PERKS.seatSp.toLocaleString()} student points</button>
-          <p class="muted sm unlock-note">${!user.verified ? 'Verify your student status to pay with student points.' : `You have ${sp.toLocaleString()} student points.`}</p>
-          <button class="btn btn-ghost block sm-btn" data-action="seat-unlock" data-with="miles" ${miles < PERKS.seatMiles ? 'disabled' : ''}>Choose my seat · ${PERKS.seatMiles.toLocaleString()} Asia Miles</button>
-          <p class="muted sm unlock-note">You have ${miles.toLocaleString()} Asia Miles.</p>
-          ${t.cabin === 'Economy' && studentEligible(t) && t.studentSeat !== true ? `<p class="muted sm unlock-note">Verified student? Answer <b>Yes</b> to student seating on the trip page and we'll seat you next to students for free.</p>` : ''}
-        </div>
-        <div class="seat-bar">
-          <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Check in · seat ' + seatSel.seat : 'Assign a seat first'}</button>
-          <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat (free)</button>
-        </div>`
-      : `<div class="card sm">${bought ? `${icon('check')} Seat choice unlocked with ${bought.with === 'sp' ? 'student points' : 'Asia Miles'}. ` : `Seat selection is included with ${esc(fareName(t.cabin, s.fare || t.fare))}. `}Pick any free seat.</div>
-        <div class="seat-bar">
-          <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Confirm seat ' + seatSel.seat : 'Pick a seat'}</button>
-          <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat</button>
-        </div>`;
+    } else if (me.selection === 'none') {
+      const pp = perks(), sp = user.verified ? spLeft(pp) : 0, miles = asiaMiles();
+      side = `<div class="card seat-lock">
+        <p class="eyebrow">${icon('seat')} Economy Light</p>
+        <h3>Seat selection isn't included</h3>
+        <p class="muted sm">Check in and we assign you a seat for free, or buy seat selection for this flight.</p>
+        ${isStudent()
+          ? `<button class="btn btn-primary block sm-btn" data-action="seat-unlock" data-with="sp" ${sp < PERKS.seatSp ? 'disabled' : ''}>Choose my seat · ${PERKS.seatSp.toLocaleString()} student points</button>
+        <p class="muted sm unlock-note">You have ${sp.toLocaleString()} student points.</p>`
+          : `<button class="btn btn-primary block sm-btn" data-action="seat-unlock" data-with="miles" ${miles < PERKS.seatMiles ? 'disabled' : ''}>Choose my seat · ${PERKS.seatMiles.toLocaleString()} Asia Miles</button>
+        <p class="muted sm unlock-note">You have ${miles.toLocaleString()} Asia Miles.</p>`}
+      </div>`;
+    } else side = `<div class="card sm">${icon('check')} ${SEL_TEXT[me.selection]}. ${me.chosen ? `Seat <b>${esc(me.seat)}</b> is yours${me.checkin === 'not_open' ? ' and will be confirmed at check-in' : ''}. Pick another to change it.` : 'Pick any available seat.'}</div>`;
+    const label = me.checkin !== 'open' ? (me.checkin === 'closed' ? 'Online check-in has closed' : 'Check-in opens 48 hours before departure')
+      : pick ? `Check in · seat ${esc(pick)}` : me.selection === 'none' || me.student ? 'Check in · assign me a free seat' : 'Check in · assign me a seat';
+    const zoneNote = v.zone && !me.student && v.zone.reserved ? `<p class="muted sm">Rows ${v.zone.rows[0]}–${v.zone.rows[1]} are the Student Zone, reserved for verified students until ${fmtTime(v.zone.releaseAt)} on ${fmtDate(v.zone.releaseAt, { day: 'numeric', month: 'short' })}.</p>` : '';
     return `
-    <div class="narrow wide">${head}
+    <div class="narrow wide">${head(me.student || me.selection === 'none' ? 'Your seat' : me.checkin === 'not_open' ? 'Choose your seat in advance' : 'Choose your seat')}
       <div class="seat-layout">
-        <div>${legend(locked ? [['lg-free locked', 'Free (choice locked)'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']] : [['lg-free', 'Free'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']])}${seatGrid(c, cell)}</div>
-        <div class="seat-side">${side}</div>
+        <div>${legend([[selectable ? 'lg-free' : 'lg-free locked', selectable ? 'Available' : 'Available (choice not included)'], ...(selectable ? [['lg-held', 'Selected']] : []), ['lg-mine', 'Your seat'], ['lg-taken', 'Not available'], ...(v.zone ? [[me.student ? 'lg-zone' : 'lg-zone-res', me.student ? 'Student Zone rows' : 'Student Zone (reserved)']] : [])])}
+          ${seatGrid(v.layout, (id) => viewCell(v, id, selectable && v.seats[id] === 'free'), v.zone ? v.zone.rows : null)}</div>
+        <div class="seat-side">${side}${zoneNote}
+          <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${me.checkin === 'open' ? '' : 'disabled'}>${label}</button>
+          ${me.chosen ? `<button class="btn btn-ghost block sm-btn" data-action="seat-drop">${me.student ? 'Go back to automatic seating' : 'Let the airline assign my seat (free)'}</button>` : ''}</div>
+          <p class="muted xs">Seat assignment (the airline gives you a seat) is free on every fare. Seat selection (you pick it) depends on your fare.</p>
+        </div>
       </div>
     </div>`;
   };
 
-  /* Live, read-only view of student seating on one flight: real passengers only. Students are ★ (never a name);
-   * hover shows their university only if they chose to share it. Not offered on Economy Light. */
-  const planner = { key: '', log: [], moved: new Set() };
-  const plannerAllowed = (t, i) => t.cabin === 'Economy' && seatRule(t.cabin, t.segments[i].fare || t.fare) !== 'paid';
-  /* Economy Flex includes seat choice: a student who said yes may pick their own seat here (until check-in). */
-  const studentCanPick = (t, i) => studentTrip(t) && !t.checkedIn && (t.segments[i].fare || t.fare) === 'Flex';
+  /* Without the server: this device only, no other passengers, no Student Zone (it needs the shared inventory). */
+  function offlineSeats(t, i, head) {
+    const s = t.segments[i], c = SZ.cabin(s, t.cabin), locked = seatRule(t.cabin, s.fare || t.fare) === 'paid' && !seatUnlocked(t, i);
+    seatCtx = { t, i, v: null };
+    if (seatSel.key !== t.ref + i) { seatSel.key = t.ref + i; seatSel.seat = ''; }
+    const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1)) : locked ? seatEl(id, 'free locked') : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', available');
+    return `<div class="narrow wide">${head(locked ? 'Your seat' : 'Choose your seat')}
+      <div class="card demo-note sm">Offline demo: seats are kept on this device only, and student seating needs the Cathay server.</div>
+      <div class="seat-layout"><div>${seatGrid(c, cell)}</div>
+        <div class="seat-side"><div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">${seatSel.seat ? 'Check in · seat ' + seatSel.seat : 'Check in · assign me a seat'}</button></div></div></div></div>`;
+  }
+
+  /* The Student Zone page: my allocation, the zone's live capacity, and my private seating preferences.
+   * It shows no other student's seat, identity or preferences. */
   views.planner = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx || 0), s = t && t.segments[i];
     if (!t || !s) return notFound();
-    if (!plannerAllowed(t, i) || !studentEligible(t)) return redirect('#/trip/' + ref);
-    const p = seatPlan(t, i), c = p.cabin;
-    seatCtx = { t, i, p, c };
-    if (planner.key !== SZ.flightKey(s)) Object.assign(planner, { key: SZ.flightKey(s), log: [], moved: new Set() });
-    if (p.live) { planner.log = p.live.log.map(esc); planner.moved = new Set(p.moved.map((m) => p.seatOf[m.id])); }
-    const groupOf = {};
-    p.groups.forEach((g) => g.seats.forEach((id) => { groupOf[id] = g; }));
-    const canPick = studentCanPick(t, i);
-    const cell = (id) => {
-      const x = p.at[id], moved = planner.moved.has(id) ? ' moved' : '';
-      if (x) {
-        const g = groupOf[id], kind = x.me ? 'mine' : g.members.length < 2 ? 'solo' : g.sameUni ? 'stu' : 'mix';
-        return seatEl(id, kind + moved, x.me ? 'You' : '★', '', x.me ? ', you' : ', Student · ' + uniLabel(x), x.me ? 'You' + (x.locked ? ' · checked in' : ' · planned seat') : 'Student · ' + uniLabel(x) + (x.locked ? ' · checked in' : ''));
-      }
-      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', passenger') : seatEl(id, 'free', '', canPick ? 'plan-pick' : '', ', free');
-    };
-    const multi = p.groups.filter((g) => g.members.length > 1);
-    const alone = p.students.filter((x) => p.seatOf[x.id] && !p.neighboursOf(x).length).length;
-    const range = (g) => g.seats.length > 1 ? `${g.seats[0]}–${g.seats[g.seats.length - 1].slice(-1)}` : g.seats[0];
+    if (!studentTrip(t)) return redirect('#/trip/' + ref);
+    const head = `${backLink('#/trip/' + ref, 'Back to trip')}<p class="eyebrow">${icon('cap')} Student seating</p><h1>Your student seat</h1>
+      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)}${t.segments.length > 1 ? ' · ' + t.segments.map((x, j) => j === i ? `<b>${x.from}→${x.to}</b>` : `<a href="#/planner/${t.ref}/${j}">${x.from}→${x.to}</a>`).join(' | ') : ''}</p>`;
+    if (!liveAccount()) return `<div class="narrow">${head}<div class="card demo-note">Student seating is allocated by the Cathay seating server, which isn't connected in this offline demo.</div></div>`;
+    const v = seatView(s);
+    seatCtx = { t, i, v };
+    if (!v) { seatSync(); return `<div class="narrow wide">${head}<div class="card empty">Loading…</div></div>`; }
+    const me = v.me;
+    if (!me.student) return `<div class="narrow">${head}${studentGate(s.dep) || '<div class="card empty">You have no student seating on this flight.</div>'}</div>`;
+    const z = v.zone, canPick = me.selection !== 'none' && me.status !== 'checked_in' && me.checkin !== 'closed';
+    const status = me.status === 'checked_in' ? `Checked in · seat <b>${esc(me.seat)}</b>` : me.alloc === 'assigned' ? `Allocated seat <b>${esc(me.seat)}</b> · confirmed at check-in` : esc(me.notice);
     return `
-    <div class="narrow wide">
-      ${backLink('#/trip/' + ref, 'Back to trip')}
-      <p class="eyebrow">${p.live ? 'Live · updates as passengers book and check in' : 'This device only (offline)'}</p>
-      <h1>Student seating on this flight</h1>
-      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)}${t.segments.length > 1 ? ' · ' + t.segments.map((x, j) => j === i ? `<b>${x.from}→${x.to}</b>` : `<a href="#/planner/${t.ref}/${j}">${x.from}→${x.to}</a>`).join(' | ') : ''}</p>
+    <div class="narrow wide">${head}
       <div class="seat-layout">
-        <div>${legend([['lg-stu', 'Students, same university'], ['lg-mix', 'Students, mixed'], ['lg-solo', 'Student alone'], ['lg-mine', 'You'], ['lg-taken', 'Other passenger'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
+        <div>${legend([['lg-mine', 'Your seat'], ['lg-stu', 'Student (hover for university)'], ['lg-free', canPick ? 'Available · tap to choose' : 'Available'], ['lg-taken', 'Not available'], ...(z.rows ? [['lg-zone', 'Student Zone rows']] : [])])}
+          ${seatGrid(v.layout, (id) => viewCell(v, id, canPick && v.seats[id] === 'free', true), z.rows)}</div>
         <div class="seat-side">
-          ${canPick ? `<div class="card sz-card sm"><b>${icon('seat')} Economy Flex: choose your own seat</b>
-            <span class="muted">Tap any free seat to take it (students near you are shown as ★). ${s.pick ? `You chose <b>${esc(s.pick)}</b>. <button type="button" class="link-btn" data-action="plan-auto">Go back to automatic seating</button>` : 'Or keep the seat we chose for you, next to other students.'}</span></div>` : ''}
-          <div class="card sm"><b>Real bookings only.</b>
-            <span class="muted">Verified students who said yes are seated in groups of 2–3 side by side, from the same university when possible. Every other seat stays on sale: if another passenger chooses a seat planned for a student, only that student's group moves. Hover a ★ to see a university, if the student chose to share it.</span></div>
-          <div class="card plan-stats">
-            <div><b>${p.students.length}</b><span>students</span></div><div><b>${multi.length}</b><span>groups</span></div>
-            <div><b>${multi.filter((g) => g.sameUni).length}</b><span>same uni</span></div><div><b>${alone}</b><span>alone</span></div>
+          <div class="card sz-card"><p class="eyebrow">Your allocation</p>
+            ${me.seat ? `<div class="seat-big">${esc(me.seat)}</div>` : ''}
+            <p class="sm" style="margin:0">${status}</p>
+            ${me.nearby && me.nearby.students ? `<p class="sm" style="margin:6px 0 0">Next to ${nearbyText(me.nearby)}</p>` : ''}
+            ${me.nearby && me.nearby.sameUni ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}
+            ${canPick ? `<div class="alloc-pick"><b>${icon('seat')} Choose your own seat</b>
+              <span class="muted">Seat selection is included in Economy ${esc(me.fare || '')}: tap an available seat. ${me.chosen ? `You chose <b>${esc(me.seat)}</b>. <button type="button" class="link-btn" data-action="seat-drop">Go back to automatic seating</button>` : 'Or keep the seat we allocated, next to other students.'}</span></div>`
+              : me.status !== 'checked_in' && me.fare === 'Light' ? '<p class="muted xs">Your student seat is assigned for free. Choosing a specific seat isn\'t included in Economy Light.</p>' : ''}
           </div>
-          <div class="card"><h3>Changes</h3>
-            ${planner.log.length ? planner.log.map((l) => `<p class="sm plan-log">${l}</p>`).join('') : '<p class="muted sm">No re-seating so far.</p>'}</div>
-          <div class="card"><h3>Student groups</h3>
-            ${p.groups.length ? p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => (m.me ? 'You' : '★')).join(' ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc((g.members.find((m) => m.shownUni) || {}).shownUni || 'same university') : 'mixed'}</b></div>`).join('') : '<p class="muted sm">No students on this flight yet.</p>'}</div>
+          <div class="card prefs" id="prefsCard">
+            <h3>${icon('shield')} Private seating preferences</h3>
+            <p class="muted sm">Is there a student on this flight you'd rather not sit next to? Choose them here. <b>It's confidential</b>: nobody is told, it isn't shown anywhere, and it works both ways: you won't be seated side by side. You can't choose who to sit next to.</p>
+            ${me.preferencesOpen ? `<div id="prefsBox"><button class="btn btn-ghost block sm-btn" data-action="prefs-load">Manage my preferences</button></div>` : '<p class="muted sm">Preferences closed 2 hours before departure.</p>'}
+          </div>
         </div>
       </div>
     </div>`;
   };
+  async function loadPrefs() {
+    const { v } = seatCtx || {}, box = $('#prefsBox');
+    if (!v || !box) return;
+    box.innerHTML = '<p class="muted sm">Loading…</p>';
+    const r = await authCall('GET', `/seating/flights/${v.fid}/participants`);
+    if (!r.ok) { box.innerHTML = `<p class="err">${esc(r.error || 'Could not load.')}</p>`; return; }
+    box.classList.add('prefs-open'); // pauses live re-rendering while choosing
+    box.innerHTML = r.participants.length
+      ? `<p class="muted xs">Students on this flight who are in its student chat (first name only).</p>
+         <div class="prefs-list">${r.participants.map((p) => `<label class="check sm"><input type="checkbox" value="${esc(p.handle)}" ${p.excluded ? 'checked' : ''}> ${esc(p.name)}${p.uni ? ` <span class="muted">· ${esc(p.uni)}</span>` : ''}</label>`).join('')}</div>
+         <div class="row gap-sm"><button class="btn btn-primary sm-btn" data-action="prefs-save">Save privately</button><button class="btn btn-ghost sm-btn" data-action="prefs-cancel">Cancel</button></div>
+         <p class="muted xs">Change this any time until ${esc(fmtTime(r.deadline))} on ${esc(fmtDate(r.deadline, { day: 'numeric', month: 'short' }))}.</p>`
+      : `<p class="muted sm">No other students from this flight's student chat to choose from yet. You can also use “Don't seat me next to them” on a chat message.</p><button class="btn btn-ghost sm-btn" data-action="prefs-cancel">Close</button>`;
+  }
 
   function barcode(seed) {
     const r = mulberry32(hash(seed)), n = 29, c = 7;
@@ -1472,6 +1459,7 @@
       </div>
       ${user.moderator ? `<a class="btn btn-ghost block" href="#/moderation">${icon('info')} Chat reports (moderator)</a>` : ''}
       ${user.reviewer ? `<a class="btn btn-ghost block" href="#/review">${icon('shield')} Student verification queue (verification team)</a>` : ''}
+      ${user.seatOps ? `<a class="btn btn-ghost block" href="#/seating-ops">${icon('seat')} Seating operations</a>` : ''}
       <form id="prefsForm" class="card form">
         <h3>Travel preferences</h3>
         <div class="two">
@@ -1790,7 +1778,7 @@
           <label class="field"><span>Date of birth</span><input type="date" name="dob" max="${todayStr()}" required></label>
           <input type="hidden" name="invite" value="${esc(invite)}">
           <input type="hidden" name="parentInvite" value="${esc(store.get('parentInvite', ''))}">
-          ${store.get('parentInvite', '') ? `<div class="sz-choice yes"><span>${icon('heart')} Parent Pass from your student: +1 bag, free date change and a welcome bonus on your first trip.</span></div>` : ''}
+          ${store.get('parentInvite', '') ? `<div class="sz-choice yes"><span>${icon('heart')} Companion Pass from your student: +1 bag, free date change and a welcome bonus on your first trip.</span></div>` : ''}
           <p id="signupErr" class="err" hidden></p>
           <button class="btn btn-primary block" type="submit">Create account</button>
           <a class="btn btn-ghost block" href="#/signin">I already have an account</a>
@@ -1818,18 +1806,8 @@
       <p class="muted sm">Unlocked by your verified student membership. No promo codes.</p>
       <div class="card balances">
         <div><span class="eyebrow">Student points</span><b class="sp">${spLeft(p).toLocaleString()}</b>
-          <p class="muted sm">Earned on flights (${PERKS.spRate}× the miles), campus and partners while you study. Spend them on student rewards; ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles when you graduate.</p></div>
-        <div><span class="eyebrow">Asia Miles</span><b>${asiaMiles().toLocaleString()}</b>
-          <p class="muted sm">Usable now: invites, the graduation gift and miles from before you joined${m.pending ? ` (+${m.pending.toLocaleString()} pending)` : ''}.</p></div>
+          <p class="muted sm">While you study, your student points are your miles: you earn ${PERKS.spRate} for every mile on Cathay flights, plus invites and bonuses. Spend them on student rewards; ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles when you graduate.</p></div>
       </div>
-
-      <div class="card perk">
-        <div class="perk-head">${icon('plug')}<div><h3>Free travel adapter</h3><p class="muted sm">${country ? `New to ${esc(countryName(country))}? Get a free Type ${esc(plug)} adapter on your first flight there, handed to you on board by the crew.` : 'A free adapter for your university\'s country, handed to you on board.'} Once per study programme.</p></div></div>
-        ${adapter}
-      </div>
-
-      ${inviteCard()}
-      ${parentPassCard()}
 
       <div class="card perk">
         <div class="perk-head">${icon('tag')}<div><h3>Student points</h3><p class="muted sm">Your flights earn ${PERKS.spRate} student points for every Asia Mile a normal member would earn (instead of miles). Spend them on student rewards now; when you graduate, ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles and the rest expires.</p></div></div>
@@ -1850,9 +1828,8 @@
              ${(p.redeemed || []).length ? `<p class="muted sm">Added: ${p.redeemed.map((r) => `${esc(rewardName(r.id))} (${esc(r.ref)})`).join(', ')}</p>` : ''}`}
       </div>
 
-      <div class="card perk concept">
-        <div class="perk-head">${icon('tag')}<div><h3>Cathay Student card <span class="badge">Concept</span></h3><p class="muted sm">Proposed with Cathay's card partner: a student account and card with no income requirement for verified full-time students, earning student points on everyday spending (not just flights), with low limits and a debit option. It upgrades to the regular Cathay card at graduation. Not available: shown to illustrate the idea.</p></div></div>
-      </div>
+      ${inviteCard()}
+      ${parentPassCard()}
 
       <div class="card perk">
         <div class="perk-head">${icon('cap')}<div><h3>Graduation gift</h3><p class="muted sm">When you graduate, we celebrate with you.</p></div></div>
@@ -1877,16 +1854,23 @@
                  : `<div class="sz-choice no"><span>Tier upgrade not unlocked yet: fly Cathay at least once between ${from} and your graduation.</span><a class="link-btn" href="#/book">Book a flight</a></div>`;
              })()}`}
       </div>
+
+      ${bankAd()}
+
+      <div class="card perk">
+        <div class="perk-head">${icon('plug')}<div><h3>Free travel adapter</h3><p class="muted sm">${country ? `New to ${esc(countryName(country))}? Get a free Type ${esc(plug)} adapter on your first flight there, handed to you on board by the crew.` : 'A free adapter for your university\'s country, handed to you on board.'} Once per study programme.</p></div></div>
+        ${adapter}
+      </div>
     </div>`;
   };
 
   views.perks = () => redirect('#/rewards');
 
   /* Invite link: remember the code for sign-up. */
-  /* Parent Pass link: remember the code for sign-up and explain what the parent gets. */
+  /* Companion Pass link: remember the code for sign-up and explain what the parent gets. */
   views.p = (code) => {
     store.set('parentInvite', String(code || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20));
-    if (user) { toast('Parent Pass links are for new members.'); return redirect('#/home'); }
+    if (user) { toast('Companion Pass links are for new members.'); return redirect('#/home'); }
     setTimeout(() => parentInfo('parent'), 400);
     return redirect('#/signup');
   };
@@ -1898,6 +1882,11 @@
   };
 
   /* ---------- flight chat: see the student flight chat section (chat-server.js) ---------- */
+  /* The seat pages show the booking's last step on top while a booking is waiting for payment. */
+  { const seatsPage = views.seats, plannerPage = views.planner;
+    views.seats = (ref, idx) => payBar(ref) + seatsPage(ref, idx);
+    views.planner = (ref, idx) => payBar(ref) + plannerPage(ref, idx); }
+
   /* ---------- student flight chat (chat-server.js enforces every rule server-side) ---------- */
   let chatConn = null;
   function chatLeave() { if (chatConn) { chatConn.close(); chatConn = null; } }
@@ -2151,6 +2140,71 @@
     }));
   }
 
+  /* Seating operations (accounts listed in SEAT_OPS on the server): Student Zone size, open reviews, manual
+   * resolution and inventory events. Staff see which passengers must not sit side by side only inside an open
+   * review that needs it, never who asked. Every view and change is audited on the server. */
+  const REVIEW_KIND = { capacity: 'Not enough seats to seat students together', constraint: "A seating restriction can't be met in the zone", locked_conflict: 'Checked-in passengers break a seating restriction', seat_unavailable: "A checked-in passenger's seat became unavailable" };
+  views['seating-ops'] = () => {
+    if (!user || !user.seatOps) return `<div class="narrow"><div class="card empty">Airline operations only.</div></div>`;
+    return `<div class="narrow wide"><header class="pagehead"><div><p class="crumb">Operations</p><h1>Seating operations</h1>
+      <p class="sub">Student seating, allocations that need a person, and manual resolution. Changes never break a passenger's confidential seating restrictions, and every action is audited.</p></div></header>
+      <div id="opsBox" class="stack"><p class="muted">Loading…</p></div></div>`;
+  };
+  async function loadSeatOps() {
+    const box = $('#opsBox'); if (!box) return;
+    const fid = route()[1];
+    if (!fid) {
+      const r = await authCall('GET', '/seating/ops/flights');
+      if (!r.ok) { box.textContent = r.error || 'Could not load.'; return; }
+      box.innerHTML = `<p class="muted sm">Inventory adapter: <b>${esc(r.inventory)}</b>${r.inventory === 'simulated' ? ' (prototype, not connected to an airline system)' : ''}</p>` + (r.flights.length ? r.flights.map((f) => `<a class="card row between" href="#/seating-ops/${esc(f.fid)}">
+        <span><b>${esc(f.seg.number)} · ${esc(f.seg.from)} → ${esc(f.seg.to)}</b><br><span class="muted sm">${esc(fmtDate(f.seg.dep))} · ${f.pax} passengers · ${f.students} students</span></span>
+        ${f.open ? `<span class="badge warn">${f.open} to review</span>` : '<span class="badge ok">OK</span>'}</a>`).join('') : '<div class="card empty">No flights with bookings yet.</div>');
+      return;
+    }
+    const r = await authCall('GET', `/seating/ops/flights/${encodeURIComponent(fid)}`);
+    if (!r.ok) { box.textContent = r.error || 'Could not load.'; return; }
+    const f = r.flight, bySeat = {};
+    f.pax.forEach((p) => { if (p.seat) bySeat[p.seat] = p; });
+    const sold = new Set(f.sold), blocked = f.blocked;
+    const cell = (id) => {
+      const p = bySeat[id];
+      if (p) return seatEl(id, p.student ? 'stu-seat' : 'pax-seat', p.status === 'checked_in' ? '✓' : '', '', ` · ${p.name}${p.student ? ' · student' : ''} · ${p.status === 'checked_in' ? 'checked in' : p.seatKind}`);
+      if (blocked[id]) return seatEl(id, 'blk', '', '', ` · blocked: ${blocked[id]}`);
+      if (sold.has(id)) return seatEl(id, 'taken', '', '', ' · sold (other channel)');
+      return seatEl(id, 'free', '', '', ' · free');
+    };
+    const open = f.reviews.filter((x) => x.status === 'open');
+    box.innerHTML = `${backLink('#/seating-ops', 'All flights')}
+      <h2 style="margin-top:0">${esc(f.seg.number)} · ${esc(f.seg.from)} → ${esc(f.seg.to)} · ${esc(fmtDate(f.seg.dep))}</h2>
+      <p class="muted sm">${esc(f.seg.aircraft)} · inventory: <b>${esc(f.inventory)}</b> · ${f.zone.mode === 'dynamic' ? 'Student seating: dynamic (anywhere in Economy, nothing reserved)' : `Student Zone rows ${f.zone.firstRow}–${f.zone.lastRow} (${f.zone.seats.length} seats)`}${f.zone.reserved ? ', reserved' : ', released to general sale'}</p>
+      ${open.length ? open.map((x) => `<div class="card vf-status warn ops-review"><div class="row between"><b>${esc(REVIEW_KIND[x.kind] || x.kind)}</b><span class="badge warn">open</span></div>
+        <p class="sm">Passengers: ${x.names.map(esc).join(', ')}</p>
+        ${x.restrictions.length ? `<p class="sm"><b>Must not sit side by side</b> (confidential, for resolving this review only):<br>${x.restrictions.map((p) => `${esc(p.a)} and ${esc(p.b)}`).join('<br>')}</p>` : ''}
+        <div class="row gap-sm"><input class="ops-note" placeholder="Resolution note (e.g. handled at the counter)"><button class="btn btn-ghost sm-btn" data-ops-resolve="${esc(x.id)}">Mark resolved</button></div></div>`).join('') : '<div class="card sm">No open reviews.</div>'}
+      <div class="seat-layout">
+        <div>${legend([['lg-stu', 'Student'], ['lg-pax', 'Other passenger'], ['lg-taken', 'Sold elsewhere'], ['lg-blk', 'Blocked'], ['lg-free', 'Free']])}${seatGrid(f.layout, cell, f.zone.mode === 'dynamic' ? null : [f.zone.firstRow, f.zone.lastRow])}</div>
+        <div class="seat-side">
+          ${f.zone.mode === 'dynamic' ? '<div class="card sm"><h3>Dynamic student seating</h3><span class="muted">Students are placed anywhere in Economy in groups of 2–3, same university first. No seat is reserved: when a passenger chooses a seat planned for a student, the students are re-seated so nobody is left alone.</span></div>' : `<form class="card form" id="opsZone"><h3>Student Zone</h3>
+            <div class="two"><label class="field"><span>First row</span><input name="firstRow" type="number" value="${f.zone.firstRow}"></label><label class="field"><span>Last row</span><input name="lastRow" type="number" value="${f.zone.lastRow}"></label></div>
+            <label class="field"><span>Release unused seats (hours before departure)</span><input name="releaseHours" type="number" value="${f.zone.releaseHours}"></label>
+            <label class="field"><span>Reason</span><input name="reason" required></label><button class="btn btn-primary sm-btn">Save zone</button></form>`}
+          <form class="card form" id="opsAssign"><h3>Manual resolution</h3>
+            <label class="field"><span>Passenger</span><select name="uid">${f.pax.map((p) => `<option value="${esc(p.uid)}">${esc(p.name)} · ${esc(p.seat || 'no seat')}${p.status === 'checked_in' ? ' · checked in' : ''}${p.alloc ? ' · ' + esc(p.alloc) : ''}</option>`).join('')}</select></label>
+            <div class="two"><label class="field"><span>Seat</span><input name="seat" placeholder="e.g. 61K" required></label><label class="field"><span>Reason</span><input name="reason" required></label></div>
+            <p class="muted xs">Moving a checked-in passenger is an operational decision: it is audited with your reason.</p><button class="btn btn-primary sm-btn">Place passenger</button></form>
+          <form class="card form" id="opsInv"><h3>Inventory event${f.inventory === 'simulated' ? ' (simulated)' : ''}</h3>
+            <div class="two"><label class="field"><span>Seat</span><input name="seat" required></label><label class="field"><span>Event</span><select name="action"><option value="sell">Sold elsewhere</option><option value="block">Blocked / unusable</option><option value="release">Released</option></select></label></div>
+            <label class="field"><span>Reason</span><input name="reason"></label><button class="btn btn-ghost sm-btn">Apply</button></form>
+        </div>
+      </div>
+      <div class="card"><h3>Change log</h3>${f.log.length ? f.log.map((l) => `<p class="sm plan-log">${esc(l.at.slice(0, 16).replace('T', ' '))} · ${esc(l.text)}</p>`).join('') : '<p class="muted sm">No changes.</p>'}</div>
+      <div class="card"><h3>Audit trail</h3><div class="ops-audit">${f.audit.map((a) => `<p class="xs"><span class="mono">${esc(a.at.slice(5, 16).replace('T', ' '))}</span> ${esc(a.action)}${a.seat ? ' · ' + esc(a.seat) : ''}${a.count !== undefined ? ' · ' + a.count : ''}${a.reason ? ' · ' + esc(a.reason) : ''}</p>`).join('')}</div></div>`;
+    const post = async (method, path, body) => { const x = await authCall(method, `/seating/ops/flights/${encodeURIComponent(fid)}${path}`, body); toast(x.ok ? 'Saved.' : x.error || 'Failed.'); if (x.ok) loadSeatOps(); };
+    const form = (id, method, path) => $(id) && $(id).addEventListener('submit', (e) => { e.preventDefault(); e.stopPropagation(); post(method, path, Object.fromEntries(new FormData(e.target))); });
+    form('#opsZone', 'PUT', '/zone'); form('#opsAssign', 'POST', '/assign'); form('#opsInv', 'POST', '/inventory');
+    box.querySelectorAll('[data-ops-resolve]').forEach((b) => b.addEventListener('click', () => post('POST', `/reviews/${b.dataset.opsResolve}/resolve`, { note: b.previousElementSibling.value })));
+  }
+
   /* Safety & privacy notice for students (public). */
   views['chat-safety'] = () => `
     <div class="narrow wide legal"><header class="pagehead"><div><p class="crumb">Student flight chat</p><h1>Safety &amp; privacy</h1>
@@ -2199,8 +2253,8 @@
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation', 'review']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', p: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation', 'review', 'seating-ops']);
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', p: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile', 'seating-ops': 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -2224,7 +2278,8 @@
     if (name === 'review') loadReview();
     if (user && liveAccount() && (name !== 'verify' || (sv && sv.status === 'pending_review' && !vs.replace)) && Date.now() - (fetchVerification.at || 0) > 60000) fetchVerification(true); // status can change on the server (review, expiry)
     watchInviteCard();
-    liveSync();
+    seatSync();
+    if (name === 'seating-ops') loadSeatOps();
   }
 
   function renderChrome(active) {
@@ -2277,48 +2332,60 @@
       const t = findTrip(el.dataset.ref);
       seatSel.key = ''; location.hash = `#/seats/${t.ref}/0`; // every cabin gets a seat map now
     },
-    'pick-seat'(el) {
-      seatSel.seat = el.dataset.seat;
-      document.querySelectorAll('.seat.mine').forEach((x) => x.classList.remove('mine'));
-      const cell = document.querySelector(`.seat[data-seat="${seatSel.seat}"]`);
-      if (cell) { cell.classList.add('mine'); if (cell !== el) cell.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-      const b = $('#seatConfirm');
-      b.disabled = false; b.textContent = 'Confirm seat ' + seatSel.seat;
+    async 'pick-seat'(el) {
+      const { t, i, v } = seatCtx || {};
+      if (!v) { // offline: this device only
+        seatSel.seat = el.dataset.seat; render(); return;
+      }
+      // The server checks fare, zone and restrictions and keeps the seat for this passenger until check-in.
+      const r = await seatCall('POST', v.fid, '/select', { seat: el.dataset.seat });
+      if (!r.ok) { toast(r.error || 'That seat is not available.'); await seatCall('GET', v.fid, '/seatmap'); return; }
+      flashTick(`Seat ${el.dataset.seat} is yours`); void t; void i;
+    },
+    async 'seat-drop'() {
+      const { v } = seatCtx || {};
+      if (!v) return;
+      const r = await seatCall('POST', v.fid, '/select', { seat: null });
+      toast(r.ok ? (r.view.me.student ? 'Back to automatic student seating.' : 'Your seat will be assigned for free at check-in.') : r.error || 'Failed.');
     },
     async 'confirm-seat'() {
-      const { t, i } = seatCtx;
+      const { t, i, v } = seatCtx;
       const s = t.segments[i];
-      if (liveAccount()) { // claim the seat on the shared server first: another phone may just have taken it
-        const r = await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, seatSel.seat), active: true });
-        if (r.status === 409) { toast(r.error || 'That seat was just taken.'); seatSel.seat = ''; seatSel.key = ''; return liveRerender(); }
-      }
-      s.seat = seatSel.seat;
+      if (v) { // the seating server confirms and locks the seat: another device may just have taken it
+        const btn = $('#seatConfirm'); if (btn) btn.disabled = true;
+        const r = await seatCall('POST', v.fid, '/checkin', { seat: v.me.hold || undefined, rev: v.me.rev });
+        if (!r.ok) { toast(r.error || 'Check-in failed. Try again.'); await seatCall('GET', v.fid, '/seatmap'); return; }
+        s.seat = r.view.me.seat;
+      } else s.seat = seatSel.seat || SZ.allSeats(SZ.cabin(s, t.cabin))[(hash(t.ref + i) % 30) + 10];
       seatSel.key = '';
       if (i < t.segments.length - 1) { saveTrips(); location.hash = `#/seats/${t.ref}/${i + 1}`; return; }
       t.checkedIn = true; t.checkedInAt = toISO(new Date()); saveTrips();
       if (user && user.verified && !t.studentPoints) {
         const p = perks();
-        t.studentPoints = Math.round(t.segments.reduce((n, s) => n + flightMiles(s, t.cabin), 0) * PERKS.spRate);
+        t.studentPoints = Math.round(t.segments.reduce((n, x) => n + flightMiles(x, t.cabin), 0) * PERKS.spRate);
         p.sp = (p.sp || 0) + t.studentPoints; savePerks(p); saveTrips();
-        toast(`Checked in. +${t.studentPoints.toLocaleString()} student points`);
-      } else toast('Checked in. Boarding pass ready.');
+        toast(`Checked in · seat ${s.seat}. +${t.studentPoints.toLocaleString()} student points`);
+      } else toast(`Checked in · seat ${s.seat}. Boarding pass ready.`);
       location.hash = '#/trip/' + t.ref;
     },
-    'auto-seat'() {
-      const { p, c, taken } = seatCtx, ids = SZ.allSeats(c);
-      const seat = ids.find((id) => !taken.has(id) && !(p && p.at[id])) || ids.find((id) => !taken.has(id));
-      if (!seat) return toast('No free seat left in this cabin.');
-      actions['pick-seat']({ dataset: { seat } });
-      const b = $('#seatConfirm'); if (b) b.textContent = 'Check in · seat ' + seat;
-    },
-    'seat-unlock'(el) {
-      const { t, i } = seatCtx, p = perks(), w = el.dataset.with === 'miles' ? 'miles' : 'sp';
+    async 'seat-unlock'(el) {
+      const { t, i, v } = seatCtx, p = perks(), w = el.dataset.with === 'miles' ? 'miles' : 'sp';
       if (w === 'sp' && !user.verified) return toast('Verify your student status to pay with student points.');
       if (w === 'sp' && spLeft(p) < PERKS.seatSp) return toast('Not enough student points.');
       if (w === 'miles' && asiaMiles() < PERKS.seatMiles) return toast('Not enough Asia Miles.');
+      if (v) { const r = await seatCall('POST', v.fid, '/seat-unlock', { with: w }); if (!r.ok) return toast(r.error || 'Could not unlock seat selection.'); } // the server enforces fare rules
       p.seatBuys = [...(p.seatBuys || []), { ref: t.ref, i, with: w, amount: w === 'sp' ? PERKS.seatSp : PERKS.seatMiles, at: toISO(new Date()) }];
       savePerks(p); rerender();
-      flashTick(`Seat choice unlocked · −${(w === 'sp' ? PERKS.seatSp : PERKS.seatMiles).toLocaleString()} ${w === 'sp' ? 'student points' : 'Asia Miles'}`);
+      flashTick(`Seat selection unlocked · −${(w === 'sp' ? PERKS.seatSp : PERKS.seatMiles).toLocaleString()} ${w === 'sp' ? 'student points' : 'Asia Miles'}`);
+    },
+    'prefs-load'() { loadPrefs(); },
+    'prefs-cancel'() { render(); },
+    async 'prefs-save'() {
+      const { v } = seatCtx || {};
+      const handles = [...document.querySelectorAll('#prefsBox input[type=checkbox]:checked')].map((x) => x.value);
+      const r = await authCall('PUT', `/seating/flights/${v.fid}/exclusions`, { handles });
+      toast(r.ok ? r.message : r.error || 'Could not save.');
+      if (r.ok) render();
     },
     cancel(el) {
       if (!confirm('Cancel this booking? (demo)')) return;
@@ -2360,26 +2427,19 @@
       savePerks(p); rerender();
       flashTick(`Type ${SZ.plugFor(t.segments[0].to)} adapter claimed`);
     },
-    async 'plan-pick'(el) {
-      const { t, i } = seatCtx, s = t.segments[i], seat = el.dataset.seat;
-      if (!studentCanPick(t, i)) return;
-      if (liveAccount()) {
-        const r = await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, seat), active: true });
-        if (!r.ok) return toast(r.error || 'That seat is not available.');
-      }
-      s.pick = seat; saveTrips(); rerender(); flashTick('Seat ' + seat + ' is yours');
+    'finish-pay'(el) {
+      const t = findTrip(el.dataset.ref);
+      if (!t) return;
+      delete t.pendingPay; saveTrips();
+      toast(`Booked! Reference ${t.ref}${el.dataset.skip ? ' · seat at check-in' : ''}`);
+      location.hash = '#/trip/' + t.ref;
     },
-    async 'plan-auto'() {
-      const { t, i } = seatCtx, s = t.segments[i];
-      delete s.pick; saveTrips();
-      if (liveAccount()) await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, null), active: true });
-      rerender(); flashTick('Back to automatic seating');
-    },
+    'bank-ad'() { showModal('Student bank account', "Our partner bank's student account is coming soon. We'll let you know as soon as you can open one from the app."); },
     'parent-info'(el) { parentInfo(el.dataset.who === 'parent' ? 'parent' : 'student'); },
     'parent-copy'() {
       const link = parentLink();
-      if (navigator.share) { navigator.share({ title: 'Parent Pass', text: 'Join Cathay with my Parent Pass: an extra bag and a welcome bonus when you come to visit.', url: link }).catch(() => {}); return; }
-      (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Parent Pass link copied'), () => toast(link));
+      if (navigator.share) { navigator.share({ title: 'Companion Pass', text: 'Join Cathay with my Companion Pass: an extra bag and a welcome bonus when you come to visit.', url: link }).catch(() => {}); return; }
+      (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Companion Pass link copied'), () => toast(link));
     },
     'invite-info'(el) { inviteInfo(el.dataset.who === 'invited' ? 'invited' : 'inviter'); },
     'ref-copy'() {
@@ -2416,6 +2476,7 @@
 
   document.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (e.target.closest('#opsBox')) return; // operations forms have their own handlers
     const form = e.target, f = new FormData(form), id = form.id;
     if (id === 'quickBook') {
       const to = f.get('to'), from = f.get('from'), err = $('#qbErr');
@@ -2443,10 +2504,16 @@
       };
       if (f.get('szSeat')) t.studentSeat = f.get('szSeat') === 'yes';
       if (t.studentSeat) t.showUni = f.get('szShowUni') === 'on';
-      if (parentPassActive()) t.parentPass = true;
+      if (parentPassAvailable()) t.parentPass = true;
       t.fare = s.out.fare || null;
       trips.push(t); saveTrips(); retrieved.add(ref);
       search.out = null; search.back = null; search.step = 'out'; search.to = '';
+      if (liveAccount() && seatRule(t.cabin, t.fare) === 'free') {
+        // Seat selection is included in this fare: choose it now, before paying.
+        t.pendingPay = true; saveTrips();
+        location.hash = `#/${studentTrip(t) ? 'planner' : 'seats'}/${ref}/0`;
+        return;
+      }
       toast(`Booked! Reference ${ref}`);
       location.hash = '#/trip/' + ref;
     } else if (id === 'signinForm' || id === 'signupForm') {
