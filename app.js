@@ -437,7 +437,7 @@
     const pct = Math.max(6, Math.min(100, Math.round((done / span) * 100)));
     const body = open
       ? `<div class="chat"><div class="chat-row"><span class="ibadge">${icon('sparkle')}</span><div><h4>Your flight chat is open</h4><p>Ask about your trip, baggage, check-in and more.</p></div></div>
-          <div><button class="btn btn-primary" data-action="soon" data-label="Flight chat">Open chat ${icon('ext')}</button></div></div>`
+          <div><a class="btn btn-primary" href="#/chat/${next.ref}/0">Open chat ${icon('ext')}</a></div></div>`
       : `<div class="chat">
           <div class="chat-row"><span class="ibadge">${icon('clock')}</span><div>
             <h4><span class="d-only">Your chat unlocks 7 days before departure</span><span class="m-only">Chat unlocks 7 days before</span></h4>
@@ -445,7 +445,8 @@
             <p class="m-only">${shortDay(unlock)} · ${plural(n, 'day')} until your flight</p></div></div>
           <div class="prog" role="progressbar" aria-label="Time until your chat unlocks" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
           <p class="days-left d-only">${plural(n, 'day')} to go</p>
-          <p class="m-note m-only muted sm">Until then, explore travel tips and offers.</p></div>`;
+          <p class="m-note m-only muted sm">Until then, explore travel tips and offers.</p>
+          <p class="sm">${link(`#/chat/${next.ref}/0`, 'Demo: preview the chat now')}</p></div>`;
     return `<section class="card companion">
       <div class="ch d-only"><span class="ibadge">${icon('sparkle')}</span><div><h3>Your flight companion</h3><p>Ask about your trip, baggage, check-in and more.</p></div></div>
       ${body}
@@ -1070,12 +1071,124 @@
     return redirect(user ? '#/verify' : '#/signin');
   };
 
+  /* ---------- flight chat (transports live in chat.js) ---------- */
+  const CHAT = window.AureliaChat;
+  let chatConn = null;
+  function chatLeave() { if (chatConn) { chatConn.close(); chatConn = null; } }
+  const chatName = () => store.get('chatName', '') || (user ? `${user.firstName} ${user.lastName[0]}.` : 'Guest');
+
+  // One room per flight and day: everyone booked on CX 521 on 1 Dec lands in the same room.
+  views.chat = (ref, idx) => {
+    const t = findTrip(ref), i = Number(idx) || 0, s = t && t.segments[i];
+    const room = s && CHAT ? CHAT.roomFor(s.number, s.dep) : '';
+    if (!room) return notFound();
+    return `<div class="narrow fc-page">
+      ${backLink('#/trip/' + t.ref, 'Back to booking')}
+      <section class="card fc" id="fcBox" data-room="${room}">
+        <header class="fc-head">
+          <div><p class="lab">Flight chat</p><h1>${esc(s.number)} · ${esc(s.from)} → ${esc(s.to)}</h1><p class="muted sm">${esc(fmtDate(s.dep))}</p></div>
+          <span class="fc-stat" id="fcStat" data-state="connecting">Connecting…</span>
+        </header>
+        <div class="fc-log" id="fcLog" role="log" aria-label="Flight chat messages"></div>
+        <p class="fc-as sm muted">Chatting as <b id="fcAs"></b> <button type="button" class="fc-link" id="fcRename">Change name</button></p>
+        <form class="fc-name" id="fcNameForm" hidden><input id="fcName" maxlength="30" placeholder="Your name in this chat" aria-label="Your name in this chat"><button class="btn btn-ghost" type="submit">Save</button></form>
+        <form class="fc-compose" id="fcForm" autocomplete="off"><input id="fcInput" maxlength="${CHAT.MAX_TEXT}" placeholder="Message your flight…" aria-label="Message" enterkeyhint="send"><button class="btn btn-primary" type="submit">Send</button></form>
+      </section></div>`;
+  };
+
+  // Everything the user or the network supplies goes in through textContent, never innerHTML.
+  function mountChat() {
+    const box = $('#fcBox');
+    if (!box || !CHAT) return;
+    const room = box.dataset.room, log = $('#fcLog'), stat = $('#fcStat'), input = $('#fcInput');
+    const LABEL = { connecting: 'Connecting…', ready: 'Live', reconnecting: 'Reconnecting…', error: 'Chat unavailable', local: 'Demo · this browser only' };
+    const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+    const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    let conn = null, lastSend = 0, lastState = '';
+
+    log.appendChild(el('div', 'fc-note', CHAT.live
+      ? 'Say hello to the students on your flight. Be kind and keep personal details private. Messages are not stored: you see what is sent while you are here.'
+      : 'Demo mode: messages stay in this browser. Open this page in a second tab to try it. Deploy the chat service (aws/chat-deploy.sh) to talk across devices.'));
+
+    function addMsg(m) {
+      const mine = m.sid === CHAT.sid, stick = mine || nearBottom();
+      const row = el('div', 'fc-msg' + (mine ? ' mine' : ''));
+      row.dataset.id = m.id;
+      const body = el('div', 'fc-body'), meta = el('div', 'fc-meta');
+      meta.appendChild(el('b', '', mine ? 'You' : m.name));
+      if (m.verified) meta.insertAdjacentHTML('beforeend', tick());          // static markup, no user data
+      if (m.uni) meta.appendChild(el('span', 'fc-uni', m.uni));
+      meta.appendChild(el('time', '', new Date(m.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })));
+      body.appendChild(meta);
+      body.appendChild(el('p', 'fc-text', m.text));
+      if (!mine) row.appendChild(el('span', 'fc-av c' + (hash(m.sid) % 6), (Array.from(m.name)[0] || '?').toUpperCase()));
+      row.appendChild(body);
+      log.appendChild(row);
+      if (stick) log.scrollTop = log.scrollHeight;
+      return row;
+    }
+
+    function push(m, row) {
+      conn.send(m).catch(() => {
+        row.classList.add('failed');
+        const b = el('button', 'fc-fail', 'Not sent · Retry');
+        b.type = 'button';
+        b.addEventListener('click', () => { b.remove(); row.classList.remove('failed'); push(m, row); });
+        row.querySelector('.fc-body').appendChild(b);
+      });
+    }
+
+    conn = chatConn = CHAT.join(room, {
+      onMessage: addMsg,
+      onStatus: ({ state, detail }) => {
+        stat.dataset.state = state;
+        stat.textContent = LABEL[state] || state;
+        stat.title = detail || '';
+        if (state === 'error' && lastState !== 'error') toast('Chat: ' + (detail || 'the service is not reachable.'));
+        lastState = state;
+      },
+    });
+    conn.history.forEach(addMsg);
+    log.scrollTop = log.scrollHeight;
+
+    $('#fcAs').textContent = chatName();
+    $('#fcRename').addEventListener('click', () => {
+      const f = $('#fcNameForm'), n = $('#fcName');
+      f.hidden = !f.hidden;
+      if (!f.hidden) { n.value = chatName(); n.focus(); n.select(); }
+    });
+    $('#fcNameForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      store.set('chatName', $('#fcName').value.trim().slice(0, 30));
+      $('#fcAs').textContent = chatName();
+      e.currentTarget.hidden = true;
+      input.focus();
+    });
+    $('#fcForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      if (Date.now() - lastSend < 700) { toast('Slow down a little.'); return; }
+      lastSend = Date.now();
+      const m = CHAT.makeMessage({
+        room, text, name: chatName(),
+        uni: user && user.verified ? SZ.universityFromEmail(user.verified.email) : '',
+        verified: !!(user && user.verified),
+      });
+      if (!m) return;
+      input.value = '';
+      push(m, addMsg(m));
+      input.focus();
+    });
+    if (window.matchMedia && matchMedia('(pointer:fine)').matches) input.focus();
+  }
+
   const notFound = () => `<div class="narrow"><div class="card empty">We couldn't find that page. <a href="#/home">Go home</a></div></div>`;
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
   const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile' };
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -1083,14 +1196,16 @@
   }
 
   function render() {
+    chatLeave();
     const [r, a, b] = route();
     const name = views[r] ? r : 'home';
     if (PROTECTED.has(name) && !user) { location.hash = '#/signin'; return; }
-    if ((name === 'trip' || name === 'boarding' || name === 'seats' || name === 'planner') && !user && !retrieved.has(a)) { location.hash = '#/retrieve'; return; }
+    if ((name === 'trip' || name === 'boarding' || name === 'seats' || name === 'planner' || name === 'chat') && !user && !retrieved.has(a)) { location.hash = '#/retrieve'; return; }
     $('#view').innerHTML = views[name](a, b);
     document.body.dataset.route = name;
     renderChrome(NAV_GROUP[name]);
     window.scrollTo(0, 0);
+    if (name === 'chat') mountChat();
   }
 
   function renderChrome(active) {

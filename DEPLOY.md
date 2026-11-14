@@ -128,3 +128,27 @@ Optional overrides for any script: `AWS_REGION=...`, `STACK_NAME=...` (default `
 - **Codes are stored hashed** (HMAC-SHA256 with a per-code salt) and DynamoDB TTL deletes them automatically.
 - **The `ses:SendEmail` permission covers all SES identities in this account/region**, not just the sender — in the sandbox SES also checks the recipient's identity, so a sender-only policy would be rejected.
 - Tick status is still stored in the browser (`localStorage`), as in the original demo — the backend proves the person controls the `.edu` inbox, it doesn't issue accounts. Cognito + DynamoDB would be the next step for real accounts.
+
+## Flight chat (realtime, multi-person)
+
+The chat works in two modes, chosen automatically:
+
+- **Demo mode (default, no setup):** messages are shared between tabs of the *same browser* (try `index.html` and a second tab, or `mobile.html` next to it). Nothing leaves the browser.
+- **Live mode:** real people on different devices, via an AWS AppSync Events API (serverless WebSocket pub/sub). It needs **no IAM role**, so it works on role-restricted accounts.
+
+Turn on live mode (Git Bash, from the project folder):
+
+```bash
+export AWS_PROFILE=aurelia
+bash aws/chat-deploy.sh      # creates the chat service, writes chat-config.js (gitignored)
+bash aws/amplify-deploy.sh   # republish the site so it includes chat-config.js
+```
+
+Then open the site on two devices, sign in, and open **Open chat** on the home page (or use *Demo: preview the chat now* when the flight is more than 7 days away). Everybody booked on the same flight number and date lands in the same room. Use *Change name* in the chat so two devices signed in as the same demo account can tell each other apart.
+
+Things to know:
+
+- **No message history on the service.** You only see messages sent while you are in the room; this browser keeps the last 100 for itself.
+- **The API key is visible in the page** (it is a static site). It only allows chat publish/subscribe and expires after 30 days (`KEY_DAYS=90 bash aws/chat-deploy.sh` to change; re-run to rotate). Anyone with the site can post, and there is no moderation, so don't leave it running after the demo: `aws cloudformation delete-stack --stack-name aurelia-chat`.
+- Verified-student ticks are sent by the browser, so they are for show in this demo, not proof.
+- If `chat-deploy.sh` fails, it prints the CloudFormation reason. Send those lines to whoever is helping you; don't re-run blindly.

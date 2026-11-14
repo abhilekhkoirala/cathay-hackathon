@@ -75,6 +75,16 @@ fi
 [ -s "$ZIP" ] || die "Could not create the zip (no working 'zip' or PowerShell found)."
 
 # ---------------------------------------------------------------- upload + publish
+# Amplify allows ONE open job per branch. A run that crashed earlier leaves a PENDING job that blocks
+# create-deployment, so cancel any leftover first.
+STALE="$(aws amplify list-jobs --app-id "$APP_ID" --branch-name "$BRANCH" --max-results 10 \
+           --query "jobSummaries[?status=='PENDING'].jobId" --output text 2>/dev/null || true)"
+for J in $STALE; do
+  [ "$J" = "None" ] && continue
+  aws amplify stop-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$J" >/dev/null 2>&1 \
+    && echo "Cancelled leftover job $J" || true
+done
+
 say "Uploading to Amplify"
 read -r JOB_ID UPLOAD_URL < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH" \
                                 --query '[jobId,zipUploadUrl]' --output text)

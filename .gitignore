@@ -5,3 +5,4 @@ node_modules/
 .aws-sam/
 samconfig.toml
 CLAUDE.md
+chat-config.js

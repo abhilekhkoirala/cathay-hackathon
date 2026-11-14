@@ -406,3 +406,45 @@ a.sz-choice{text-decoration:none}
 .main,.foot{max-width:1320px}
 .narrow,.narrow.wide{max-width:none}
 .narrow > form.card,.narrow > .card.form{max-width:760px}
+
+/* ---------- flight chat ---------- */
+.narrow.fc-page{max-width:760px;margin:0 auto}
+.fc{display:flex;flex-direction:column;gap:12px;padding:18px;height:min(74vh,700px);min-height:420px}
+.fc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.fc-head h1{font-size:20px;margin:2px 0}
+.fc-head p{margin:0}
+.fc-stat{flex:none;font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:999px;background:var(--bg);color:var(--muted);white-space:nowrap}
+.fc-stat[data-state=ready]{background:var(--mint2);color:var(--ok)}
+.fc-stat[data-state=connecting],.fc-stat[data-state=reconnecting]{background:#fbebd0;color:var(--warn)}
+.fc-stat[data-state=error]{background:#f8e1de;color:var(--bad)}
+.fc-stat[data-state=local]{background:var(--mint);color:var(--brand)}
+.fc-log{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--mint);border-radius:14px;overscroll-behavior:contain}
+.fc-note{align-self:center;max-width:92%;text-align:center;font-size:12.5px;color:var(--muted);padding:2px 8px}
+.fc-msg{display:flex;gap:8px;align-items:flex-end;max-width:85%}
+.fc-msg.mine{align-self:flex-end}
+.fc-av{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;background:var(--brand)}
+.fc-av.c1{background:#2e7d5b}.fc-av.c2{background:#8a5300}.fc-av.c3{background:#4a5ca3}.fc-av.c4{background:#8a3f6b}.fc-av.c5{background:#23707a}
+.fc-body{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 12px}
+.fc-msg.mine .fc-body{background:var(--brand);border-color:var(--brand);color:#fff;border-radius:14px 14px 4px 14px}
+.fc-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.fc-meta b{color:var(--ink);font-weight:600}
+.fc-meta .tick{width:1em;height:1em;vertical-align:0}
+.fc-uni{background:var(--mint);border-radius:999px;padding:1px 7px;font-weight:600;color:var(--brand)}
+.fc-msg.mine .fc-meta{color:rgba(255,255,255,.75)}.fc-msg.mine .fc-meta b{color:#fff}
+.fc-msg.mine .fc-meta .tick{color:#7be3a6}
+.fc-msg.mine .fc-uni{background:rgba(255,255,255,.16);color:#fff}
+.fc-text{margin:2px 0 0;font-size:14.5px;line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
+.fc-msg.failed .fc-body{opacity:.75}
+.fc-fail{display:block;border:0;background:none;padding:4px 0 0;font:600 12px var(--font);color:#ffd7d2;text-decoration:underline;cursor:pointer}
+.fc-as{margin:0}
+.fc-link{border:0;background:none;padding:0 0 0 4px;font:600 13px var(--font);color:var(--brand);text-decoration:underline;cursor:pointer}
+.fc-compose,.fc-name{display:flex;gap:8px}
+.fc-name[hidden]{display:none}
+.fc-compose input,.fc-name input{flex:1;min-width:0;border:1px solid var(--line);border-radius:999px;padding:12px 18px;font:16px var(--font);background:#fff;color:var(--ink)}
+.fc-compose .btn,.fc-name .btn{flex:none}
+@media (max-width:860px){
+  body[data-route=chat] .tabbar{display:none}
+  body[data-route=chat] .main{padding-bottom:20px}
+  .fc{height:calc(100vh - 190px);height:calc(100dvh - 190px);min-height:340px;padding:14px}
+  .fc-msg{max-width:92%}
+}

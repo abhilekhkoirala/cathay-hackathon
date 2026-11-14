@@ -136,4 +136,4 @@ DEPLOY.md     step-by-step AWS install + deploy guide
 
 ## Ideas to extend
 
-A real flight-companion chat (the card is the entry point), student-only fares behind the green tick, live flight-status API, PWA install.
+Message history for the flight chat (it is live and multi-person now, see DEPLOY.md), student-only fares behind the green tick, live flight-status API, PWA install.
