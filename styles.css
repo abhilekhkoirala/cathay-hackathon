@@ -448,3 +448,8 @@ a.sz-choice{text-decoration:none}
   .fc{height:calc(100vh - 190px);height:calc(100dvh - 190px);min-height:340px;padding:14px}
   .fc-msg{max-width:92%}
 }
+
+/* live demo: schedule source on search results */
+.live-src{display:flex;align-items:center;gap:8px;padding:10px 14px;margin:0 0 12px;color:var(--muted,#66756b)}
+.live-src.on{color:#0b6b45;background:#e8f5ee;border-color:#bfe3cf;font-weight:600}
+.live-src .ico{width:16px;height:16px}

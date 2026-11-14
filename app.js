@@ -215,10 +215,98 @@
   }
   const seatYesModal = () => showModal('Great choice!', "We will do our best to seat you next to other students on this flight. Your seat will be assigned automatically at check-in.");
 
+  /* ---------- live demo: shared flights and seats (server.js → live.js, /api/live) ----------
+   * When the server is reachable, every phone sees the same real flights (OAG) and the same seats,
+   * updated within a second over Server-Sent Events. Without it, everything stays in localStorage. */
+  const LIVE = { on: false, flights: {}, state: {}, seen: {}, es: {}, sent: {}, timer: null };
+  const liveId = (s) => s.number.replace(/\s+/g, '') + '-' + s.dep.slice(0, 10);
+  const segOut = (s) => ({ number: s.number, from: s.from, to: s.to, dep: s.dep, arr: s.arr, aircraft: s.aircraft, durMin: s.durMin, stops: s.stops });
+  async function liveCall(path, body) {
+    try {
+      const res = await fetch(API + '/api/live' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await res.json().catch(() => ({}));
+      if (j.state) liveApply(j.state);
+      return { ok: res.ok, status: res.status, ...j };
+    } catch { return { ok: false, status: 0, error: 'Could not reach the live server.' }; }
+  }
+  const LIVE_VIEWS = new Set(['results', 'trip', 'seats', 'planner', 'boarding']);
+  function liveRerender() {
+    if (!LIVE_VIEWS.has(route()[0]) || document.querySelector('.modal-bg')) return;
+    const y = window.scrollY; render(); window.scrollTo(0, y);
+  }
+  function liveApply(st) {
+    const old = LIVE.state[st.id];
+    if (old && old.v >= st.v) return;
+    LIVE.seen[st.id] = old ? old.plan : st.plan;
+    LIVE.state[st.id] = st;
+    liveRerender();
+    if (old && LIVE_VIEWS.has(route()[0]) && route()[0] !== 'results' && JSON.stringify(old.plan) + old.sales + JSON.stringify(old.pax) !== JSON.stringify(st.plan) + st.sales + JSON.stringify(st.pax)) flashTick('Seats updated live');
+  }
+  function liveWatch(id) {
+    if (LIVE.es[id] || !window.EventSource) return;
+    const es = LIVE.es[id] = new EventSource(API + '/api/live/flights/' + id + '/events');
+    es.onmessage = (e) => { try { liveApply(JSON.parse(e.data)); } catch {} };
+  }
+  /* Tells the server about this user's bookings (idempotent; only changes are sent). */
+  function liveSync() {
+    if (!LIVE.on || !user) return;
+    clearTimeout(LIVE.timer);
+    LIVE.timer = setTimeout(() => {
+      trips.forEach((t) => t.segments.forEach((s) => {
+        if (t.cabin !== 'Economy' || new Date(s.dep) < new Date()) return;
+        const stu = studentTrip(t), id = liveId(s);
+        const body = {
+          seg: segOut(s), userId: user.id, name: user.firstName,
+          student: stu ? { uni: SZ.universityFromEmail(user.verified.email) } : null,
+          seat: stu ? null : s.seat || null, locked: stu && t.checkedIn ? s.seat || null : null,
+          active: t.status === 'Confirmed',
+        };
+        const k = JSON.stringify(body);
+        if (LIVE.sent[id] === k) return;
+        LIVE.sent[id] = k;
+        liveCall('/flights/' + id + '/pax', body).then((r) => { if (r.ok) liveWatch(id); else delete LIVE.sent[id]; });
+      }));
+    }, 120);
+  }
+  /* The planner can open any flight, even one this user isn't on. */
+  function liveEnsure(s) {
+    const id = liveId(s);
+    if (!LIVE.on || LIVE.state[id] || LIVE.sent['ensure' + id]) return;
+    LIVE.sent['ensure' + id] = '1';
+    liveCall('/flights/' + id + '/ensure', { seg: segOut(s) }).then((r) => { if (r.ok) { liveWatch(id); liveRerender(); } });
+  }
+  /* Real flights for a search: OAG via the server, cached per search; simulated until it answers. */
+  function flightsFor(from, to, date, cabin) {
+    const k = [from, to, date, cabin].join('|'), c = LIVE.flights[k];
+    if (c && c.flights) return c.flights;
+    if (LIVE.on && !c) {
+      LIVE.flights[k] = { loading: true };
+      liveCall(`/flights?from=${from}&to=${to}&date=${date}&cabin=${encodeURIComponent(cabin)}`).then((r) => {
+        LIVE.flights[k] = r.ok && r.flights && r.flights.length ? r : { flights: generateFlights(from, to, date, cabin), source: 'sim' };
+        liveRerender();
+      });
+    }
+    return LIVE.flights[k] && LIVE.flights[k].loading ? null : generateFlights(from, to, date, cabin);
+  }
+
   /* Re-runs the student seat planner for one flight with every seat sold so far, and remembers the
    * result so students only move when a seat planned for them is bought. */
   function seatPlan(t, i) {
     const s = t.segments[i], key = SZ.flightKey(s);
+    const st = LIVE.on && LIVE.state[liveId(s)];
+    if (st) { // shared state: other phones' passengers and the server's plan
+      const mine = studentTrip(t), myId = user ? user.id : '';
+      let real = st.pax.filter((x) => x.student).map((x) => ({ id: x.id, me: x.id === myId, name: x.name, uni: x.uni, year: '', field: '', locked: x.locked }));
+      if (mine && !real.some((x) => x.me)) real.push({ id: myId, me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null });
+      if (!mine) real = real.filter((x) => !x.me);
+      const sold = st.sales.concat(st.pax.filter((x) => !x.student && x.seat && x.id !== myId).map((x) => x.seat));
+      if (!mine && s.seat) sold.push(s.seat);
+      const p = SZ.plan(s, { real, sold, fixed: st.plan, prev: LIVE.seen[st.id] || st.plan });
+      if (p.seatOf[myId]) p.seatOf.me = p.seatOf[myId];
+      p.live = st;
+      return p;
+    }
+    if (LIVE.on) liveEnsure(s);
     const me = studentTrip(t)
       ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null }
       : null;
@@ -585,7 +673,11 @@
     if (!s.to) return redirect('#/book');
     const outbound = s.step === 'out';
     const leg = outbound ? { from: s.from, to: s.to, date: s.depart } : { from: s.to, to: s.from, date: s.ret };
-    const flights = generateFlights(leg.from, leg.to, leg.date, s.cabin);
+    const flights = flightsFor(leg.from, leg.to, leg.date, s.cabin);
+    const live = LIVE.flights[[leg.from, leg.to, leg.date, s.cabin].join('|')];
+    const srcNote = !LIVE.on ? '' : !flights ? '<div class="card sm live-src">Loading the real Cathay schedule…</div>'
+      : live && live.source === 'oag' ? `<div class="card sm live-src on">${icon('check')} Real Cathay schedule · OAG</div>`
+      : `<div class="card sm live-src">Simulated schedule${live && live.note ? ' · ' + esc(live.note) : ''}</div>`;
     const strip = [-2, -1, 0, 1, 2].map((n) => shiftDate(leg.date, n)).filter((d) => d >= todayStr()).map((d) => {
       const min = Math.min(...generateFlights(leg.from, leg.to, d, s.cabin).map((f) => f.price));
       return `<button class="day ${d === leg.date ? 'on' : ''}" data-action="set-date" data-date="${d}"><span>${fmtDate(d + 'T12:00', { weekday: 'short', day: 'numeric', month: 'short' })}</span><b>${money(min * s.pax)}</b></button>`;
@@ -597,8 +689,9 @@
       <h1>${city(leg.from)} → ${city(leg.to)}</h1>
       ${!outbound ? `<div class="card chosen sm">Outbound selected: <b>${s.out.number}</b> ${fmtDate(s.out.dep)} ${fmtTime(s.out.dep)}</div>` : ''}
       <div class="days">${strip}</div>
+      ${srcNote}
       <div class="flights">
-        ${flights.map((f, i) => `
+        ${(flights || []).map((f, i) => `
         <div class="card flight">
           <div class="f-main">
             <div><b class="time">${fmtTime(f.dep)}</b><div class="muted sm">${f.from}</div></div>
@@ -758,7 +851,7 @@
               <p class="eyebrow">We've seated you in</p>
               <div class="seat-big">${mine}</div>
               ${nb.length
-                ? `<p class="sm" style="margin:0">Next to ${nb.map((x) => `${who(x)} · ${esc(x.year)}, ${esc(x.field)}`).join('<br>and ')}</p>
+                ? `<p class="sm" style="margin:0">Next to ${nb.map((x) => `${who(x)}${x.year ? ` · ${esc(x.year)}, ${esc(x.field)}` : ' · on Cathay Student'}`).join('<br>and ')}</p>
                    ${nb.some((x) => x.uni === me.uni) ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}`
                 : `<p class="sm" style="margin:0">No other student could be seated next to you yet. We keep trying until check-in closes.</p>`}
               <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Student seats are assigned automatically.</p>
@@ -771,7 +864,7 @@
 
     if (seatSel.key !== ref + i) { seatSel.key = ref + i; seatSel.seat = s.seat || ''; }
     const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1), 'pick-seat')
-      : p.paid.has(id) ? seatEl(id, 'taken') : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
+      : p.paid.has(id) || (p.at[id] && p.at[id].locked) ? seatEl(id, 'taken') : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
     return `
     <div class="narrow wide">${head}
       <div class="seat-layout">
@@ -795,6 +888,7 @@
     const p = seatPlan(t, i), c = p.cabin;
     seatCtx = { t, i, p };
     if (planner.key !== SZ.flightKey(s)) Object.assign(planner, { key: SZ.flightKey(s), log: [], moved: new Set() });
+    if (p.live) { planner.log = p.live.log.map(esc); planner.moved = new Set(p.moved.map((m) => p.seatOf[m.id])); }
     const groupOf = {};
     p.groups.forEach((g) => g.seats.forEach((id) => { groupOf[id] = g; }));
     const cell = (id) => {
@@ -1216,6 +1310,7 @@
     renderChrome(NAV_GROUP[name]);
     window.scrollTo(0, 0);
     if (name === 'chat') mountChat();
+    liveSync();
   }
 
   function renderChrome(active) {
@@ -1254,10 +1349,10 @@
     pick(el) {
       const idx = Number(el.dataset.idx);
       if (search.step === 'out') {
-        search.out = generateFlights(search.from, search.to, search.depart, search.cabin)[idx];
+        search.out = flightsFor(search.from, search.to, search.depart, search.cabin)[idx];
         if (search.type === 'return') { search.step = 'ret'; render(); } else location.hash = '#/confirm';
       } else {
-        search.back = generateFlights(search.to, search.from, search.ret, search.cabin)[idx];
+        search.back = flightsFor(search.to, search.from, search.ret, search.cabin)[idx];
         location.hash = '#/confirm';
       }
     },
@@ -1277,9 +1372,19 @@
       const b = $('#seatConfirm');
       b.disabled = false; b.textContent = 'Confirm seat ' + seatSel.seat;
     },
-    'confirm-seat'() {
+    async 'confirm-seat'() {
       const { t, i } = seatCtx;
-      t.segments[i].seat = seatSel.seat;
+      const s = t.segments[i];
+      if (LIVE.on && user) { // claim the seat on the shared server first: another phone may just have taken it
+        const stu = studentTrip(t);
+        const r = await liveCall('/flights/' + liveId(s) + '/pax', {
+          seg: segOut(s), userId: user.id, name: user.firstName,
+          student: stu ? { uni: SZ.universityFromEmail(user.verified.email) } : null,
+          seat: stu ? null : seatSel.seat, locked: stu ? seatSel.seat : null, active: true,
+        });
+        if (r.status === 409) { toast(r.error || 'That seat was just taken.'); seatSel.seat = ''; seatSel.key = ''; return liveRerender(); }
+      }
+      s.seat = seatSel.seat;
       seatSel.key = '';
       if (i < t.segments.length - 1) { saveTrips(); location.hash = `#/seats/${t.ref}/${i + 1}`; return; }
       t.checkedIn = true; saveTrips();
@@ -1296,8 +1401,13 @@
       const seat = ids.find((id) => !p.paid.has(id) && !p.at[id]) || ids.find((id) => !p.paid.has(id));
       if (seat) actions['pick-seat']({ dataset: { seat } });
     },
-    'plan-sell'(el) {
+    async 'plan-sell'(el) {
       const { t, i, p: before } = seatCtx, id = el.dataset.seat, key = SZ.flightKey(t.segments[i]);
+      if (before.live) {
+        const r = await liveCall('/flights/' + before.live.id + '/seats/' + id, {});
+        if (!r.ok) toast(r.error || 'Could not sell that seat.');
+        return;
+      }
       const sales = store.get('sales', {});
       sales[key] = [...(sales[key] || []), id];
       store.set('sales', sales);
@@ -1308,7 +1418,8 @@
       const y = window.scrollY; render(); window.scrollTo(0, y);
     },
     'plan-reset'() {
-      const { t, i } = seatCtx, key = SZ.flightKey(t.segments[i]);
+      const { t, i, p } = seatCtx, key = SZ.flightKey(t.segments[i]);
+      if (p.live) { liveCall('/flights/' + p.live.id + '/reset', {}); return; }
       const sales = store.get('sales', {}), plans = store.get('seatplans', {});
       delete sales[key]; delete plans[key];
       store.set('sales', sales); store.set('seatplans', plans);
@@ -1563,6 +1674,11 @@
     loadState();
     render();
     if (!location.hash) location.hash = '#/home';
+    fetch(API + '/api/live/health').then((r) => r.ok && r.json()).then((j) => {
+      if (!j || !j.ok) return;
+      LIVE.on = true; document.body.dataset.live = 'on';
+      const y = window.scrollY; render(); window.scrollTo(0, y);
+    }).catch(() => {});
   });
   window.__aurelia = { render, views };
 })();

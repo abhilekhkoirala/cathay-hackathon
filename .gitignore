@@ -6,3 +6,5 @@ node_modules/
 samconfig.toml
 CLAUDE.md
 chat-config.js
+data/live-db.json*
+data/oag-sample.json

@@ -8,6 +8,8 @@
 #
 # Optional env: AWS_REGION (default ap-southeast-2), STACK_NAME (default aurelia-air), AWS_PROFILE
 set -euo pipefail
+# Use the profile saved by aws/login.sh when no credentials are set in this terminal.
+[ -z "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}" ] && grep -q "^\[cathay\]" "$HOME/.aws/credentials" 2>/dev/null && export AWS_PROFILE=cathay
 cd "$(dirname "$0")/.."
 
 STACK_NAME="${STACK_NAME:-aurelia-air}"

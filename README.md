@@ -37,6 +37,25 @@ A cinematic, scroll-driven opening page for the pitch: one camera move from a je
 - `landing.html?p=0.5` freezes the story at that point (useful for screenshots and slides).
 - Facts used: founded 1946 in Hong Kong, 100+ destinations, founding oneworld member (Cathay Pacific, 2026).
 
+## Live demo: shared flights and seats (two phones)
+
+With `npm start` (or on a cloud machine, see below), every phone that opens the site shares **one set of flights and seats**:
+
+- **Real schedules:** searches return real Cathay Pacific flights from the **OAG Flight Info API**, fetched by the server. Set `OAG_KEY` in `.env`; the key never reaches the browser. Answers are cached per route and day to save quota. Without a key, or when OAG fails, the app shows the simulated schedule and labels it.
+- **Shared seats:** bookings, check-in seats and student seating are stored on the server (`data/live-db.json`). When one phone books, checks in or the planner sells a seat, every open phone updates within a second (Server-Sent Events), with no reload.
+- **Real students together:** verified students on different phones are seated by the same planner as the simulated students. Same university first, so verify both with the same university domain for the demo. If a paying passenger buys a seat planned for them, they move together.
+- **Two people, one seat:** if two people pick the same seat at once, the second gets "That seat was just taken".
+
+**Demo:**
+1. Sign in as Hatim on one phone and Abhilekh on the other, and verify both.
+2. Book the same flight for tomorrow with "Yes" to student seating.
+3. Check in on both: each is seated next to the other.
+4. Open *See how students are seated* on a laptop and sell the seat planned for one of them. Both phones re-seat live.
+
+**Without the server** (any static host, `python3 -m http.server`), everything still works per device in localStorage.
+
+**Hosting for phones over the internet:** `HOST=ubuntu@<ip> SSH_KEY=<key.pem> bash aws/seat-server.sh` puts it on a Lightsail or EC2 Ubuntu machine. That needs no IAM role, just SSH; open TCP port 3000 in the firewall. Quick alternative from a laptop: `npm start`, then `cloudflared tunnel --url http://localhost:3000`.
+
 ## Student verification ("Cathay Student Verify")
 
 1. Settings → **Verify student status** (or the banner on *Student offers*).
@@ -136,9 +155,11 @@ student-zone.js  simulated students per flight, economy cabin layout, student se
 app.js        router, views, booking / check-in / seat map / perks / verification UI
 config.js     apiBase for the verification backend
 server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health (local / any Node host)
+live.js       live demo API (/api/live): shared flights and seats, student planner on the server, Server-Sent Events
+oag.js        OAG Flight Info API client (server-side, key from .env)
 mobile.html   phone-frame wrapper around index.html (9:41 status bar)
 .env.example  SMTP settings template (server.js only)
-aws/          AWS deployment: template.yaml (SAM), lambda/ (same API on Lambda), deploy.sh, destroy.sh, ses-verify.sh, test/
+aws/          AWS deployment: template.yaml (SAM), lambda/ (same API on Lambda), deploy.sh, destroy.sh, ses-verify.sh, seat-server.sh (live demo on Lightsail/EC2), test/
 DEPLOY.md     step-by-step AWS install + deploy guide
 ```
 

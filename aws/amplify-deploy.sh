@@ -10,6 +10,8 @@
 #
 # Optional env: AWS_REGION (default ap-southeast-2), APP_NAME (default aurelia-air), BRANCH (default main)
 set -euo pipefail
+# Use the profile saved by aws/login.sh when no credentials are set in this terminal.
+[ -z "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}" ] && grep -q "^\[cathay\]" "$HOME/.aws/credentials" 2>/dev/null && export AWS_PROFILE=cathay
 cd "$(dirname "$0")/.."
 
 APP_NAME="${APP_NAME:-aurelia-air}"

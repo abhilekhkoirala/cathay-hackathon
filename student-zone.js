@@ -149,12 +149,14 @@
   /* Seat every student on the flight.
    * opts.sold: seats bought by paying passengers since the flight opened.
    * opts.me:   the signed-in student ({ id, name, uni, locked? }); a locked (checked-in) seat never moves.
-   * opts.prev: { studentId: seat } from the last run, so groups that are still intact stay where they are. */
+   * opts.prev: { studentId: seat } from the last run, so groups that are still intact stay where they are.
+   * opts.real: real students booked from other devices (live demo), in booking order.
+   * opts.fixed: { studentId: seat } decided by the shared seat server; kept as they are when still free. */
   function plan(seg, opts = {}) {
     const c = cabin(seg);
     const paid = paidSeats(seg);
     (opts.sold || []).forEach((id) => paid.add(id));
-    const students = studentsOn(seg).concat(opts.me ? [opts.me] : []);
+    const students = studentsOn(seg).concat(opts.real || [], opts.me ? [opts.me] : []);
     const prev = opts.prev || {};
     const seatOf = {}, used = new Set();
     const isFree = (id) => !paid.has(id) && !used.has(id);
@@ -162,11 +164,12 @@
 
     const locked = new Set(students.filter((s) => s.locked).map((s) => s.locked));
     students.filter((s) => s.locked).forEach((s) => put(s, s.locked));
+    if (opts.fixed) students.forEach((s) => { const id = opts.fixed[s.id]; if (!seatOf[s.id] && id && isFree(id)) put(s, id); });
 
     // Students who still sit next to another student in the last run stay where they are;
     // only those whose group was broken by a sale are grouped again.
     const prevAt = {};
-    students.forEach((s) => { if (!s.locked && prev[s.id] && isFree(prev[s.id])) prevAt[prev[s.id]] = s; });
+    students.forEach((s) => { if (!seatOf[s.id] && prev[s.id] && isFree(prev[s.id])) prevAt[prev[s.id]] = s; });
     runs(c, (id) => Boolean(prevAt[id]) || locked.has(id)).forEach((r) => {
       if (r.length >= 2) r.forEach((id) => { if (prevAt[id]) put(prevAt[id], id); });
     });

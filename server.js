@@ -162,9 +162,12 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
   res.json({ ok: true, verified: true, email, verifiedAt: new Date().toISOString() });
 });
 
+/* Live demo: shared flights (OAG) and seats for every device. */
+app.use('/api/live', require('./live').router);
+
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
 const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/chat.js': 'chat.js', '/chat-config.js': 'chat-config.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };
-app.get(Object.keys(FILES), (req, res) => res.sendFile(path.join(__dirname, FILES[req.path])));
+app.get(Object.keys(FILES), (req, res) => res.sendFile(path.join(__dirname, FILES[req.path]), (err) => { if (err && !res.headersSent) res.status(404).end(); })); // optional files (chat-config.js) may not exist
 
 if (require.main === module) {
   app.listen(PORT, () => {
