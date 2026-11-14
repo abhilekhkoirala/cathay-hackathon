@@ -60,7 +60,11 @@
 
   /* Deterministic: the same flight always has the same students. Most are heading to study
    * at the destination (Moscow → HKG: students going to HK universities), some are going home. */
+  /* Real data only: no simulated passengers or students. Set to true to fill planes with simulated
+   * background passengers for offline demos. */
+  const SIMULATE = false;
   function studentsOn(seg) {
+    if (!SIMULATE) return [];
     const r = mulberry32(hash('sz' + flightKey(seg)));
     const away = seg.to === 'HKG' ? seg.from : seg.to;
     const [lo, hi] = BUSY[away] || [1, 5];
@@ -127,6 +131,7 @@
 
   /* Seats already sold to (simulated) passengers: deterministic, about half of Economy, 40% elsewhere. */
   function paidSeats(seg, name = 'Economy') {
+    if (!SIMULATE) return new Set();
     const r = mulberry32(hash('paid' + flightKey(seg) + (name === 'Economy' ? '' : name)));
     const share = name === 'Economy' ? 0.5 : 0.4;
     return new Set(allSeats(cabin(seg, name)).filter(() => r() < share));
@@ -165,7 +170,8 @@
    * opts.me:   the signed-in student ({ id, name, uni, locked? }); a locked (checked-in) seat never moves.
    * opts.prev: { studentId: seat } from the last run, so groups that are still intact stay where they are.
    * opts.real: real students booked from other devices (live demo), in booking order.
-   * opts.fixed: { studentId: seat } decided by the shared seat server; kept as they are when still free. */
+   * opts.fixed: { studentId: seat } decided by the shared seat server; kept as they are when still free.
+   * opts.apart: [[idA, idB], ...] students who must not sit side by side (private opt-outs). */
   function plan(seg, opts = {}) {
     const c = cabin(seg);
     const paid = paidSeats(seg);
@@ -219,6 +225,22 @@
       if (mate) { used.delete(trio[2]); put(mate, pairRun[0]); return put(s, pairRun[1]); }
       const seat = allSeats(c).find(isFree);
       if (seat) put(s, seat);
+    });
+
+    // Private seating exclusions ("don't seat me next to this person"). Never disclosed; only applied here.
+    // The person who asked is never told whether it changed anything, and the other person never knows.
+    (opts.apart || []).forEach(([a, b]) => {
+      const sa = seatOf[a], sb = seatOf[b];
+      if (!sa || !sb || !neighbours(c, sa).includes(sb)) return;
+      const who = (id) => students.find((x) => x.id === id && !x.locked);
+      const mover = who(b) || who(a);
+      if (!mover) return;
+      const keep = mover.id === b ? sa : sb;
+      used.delete(seatOf[mover.id]);
+      const ok = (id) => isFree(id) && !neighbours(c, id).includes(keep);
+      const near = Object.entries(seatOf).filter(([k]) => k !== mover.id).flatMap(([, id]) => neighbours(c, id)).find(ok);
+      const seat = near || allSeats(c).find(ok);
+      if (seat) put(mover, seat); else used.add(seatOf[mover.id]);
     });
 
     const at = {};

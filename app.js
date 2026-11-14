@@ -189,6 +189,7 @@
     if (signup) store.set('invite', '');
     toast(signup ? `Welcome, ${r.user.firstName}! Your member number is ${r.user.memberId}.` : `Signed in as ${r.user.firstName}`);
     location.hash = '#/home'; render();
+    if (!user.verified) setTimeout(studentPromo, 600); // guide new and returning members towards student verification
   }
   function signOutLocal(msg) {
     if (session() && !isLocalAccount()) authCall('POST', '/auth/logout', {});
@@ -345,14 +346,21 @@
     if (!liveAccount()) return;
     clearTimeout(LIVE.timer);
     LIVE.timer = setTimeout(() => {
-      trips.forEach((t) => t.segments.forEach((s) => {
+      // One record per flight: if several bookings are on the same flight, the active (student) one wins.
+      const rank = (t) => (t.status === 'Confirmed' ? 2 : 0) + (studentTrip(t) ? 1 : 0);
+      const best = {};
+      trips.forEach((t) => t.segments.forEach((s, i) => {
+        const id = liveId(s);
+        if (!best[id] || rank(t) > rank(best[id].t)) best[id] = { t, s };
+      }));
+      Object.values(best).forEach(({ t, s }) => {
         if (new Date(s.dep) < new Date()) return;
         const id = liveId(s), body = paxBody(t, s, studentTrip(t) && !t.checkedIn ? null : s.seat);
         const k = JSON.stringify(body);
         if (LIVE.sent[id] === k) return;
         LIVE.sent[id] = k;
         liveCall('/flights/' + id + '/pax', body).then((r) => { if (r.ok) liveWatch(id); else delete LIVE.sent[id]; });
-      }));
+      });
     }, 120);
   }
   /* The planner can open any flight, even one this user isn't on. */
@@ -457,7 +465,7 @@
 
   function studentCard(t) {
     if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
-    const planner = `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See how students are seated (demo)</a>`;
+    const planner = plannerAllowed(t, 0) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See student seating on this flight</a>` : '';
     if (!studentEligible(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
     const seated = studentTrip(t) && t.checkedIn ? t.segments.map((s, i) => {
       const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
@@ -708,7 +716,7 @@
           <div class="prog" role="progressbar" aria-label="Time until your chat unlocks" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
           <p class="days-left d-only">${plural(n, 'day')} to go</p>
           <p class="m-note m-only muted sm">Until then, explore travel tips and offers.</p>
-          <p class="sm">${link(`#/chat/${next.ref}/0`, 'Demo: preview the chat now')}</p></div>`;
+          <p class="sm">${link('#/chat-safety', 'How the student chat keeps you safe')}</p></div>`;
     return `<section class="card companion">
       <div class="ch d-only"><span class="ibadge">${icon('sparkle')}</span><div><h3>Your flight companion</h3><p>Ask about your trip, baggage, check-in and more.</p></div></div>
       ${body}
@@ -732,21 +740,88 @@
     <div><b>${esc(a.title)}</b><span class="s">${a.date ? fmtDate(a.date + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' : ''}${esc(a.note)}</span></div>
     <b class="pts${a.pts < 0 ? ' neg' : ''}">${a.pts < 0 ? '−' : '+'}${pts(Math.abs(a.pts))} ${a.unit === 'miles' ? 'miles' : 'pts'}</b></div>`);
 
+  /* ---------- public Cathay interface (signed out / not a verified student) ---------- */
+  const isStudent = () => Boolean(user && user.verified);
   function signedOutHome() {
     return `<div class="home noflight">
-      <header class="pagehead"><div><p class="crumb">Overview / Student home</p><h1>Welcome to Cathay Student</h1>
-        <p class="sub">Sign in to see your points and flights, or find an existing booking.</p></div></header>
-      <section class="points"><div class="pts-main"><span class="lab">Your student points</span>
-        <div class="pts-num sm-num">Sign in to see your balance</div><a class="btn btn-lime" href="#/signin">Sign in / up</a></div></section>
+      <header class="pagehead"><div><p class="crumb">Overview</p><h1>Welcome to Cathay</h1>
+        <p class="sub">Book flights, manage your trips and earn Asia Miles.</p></div></header>
+      ${quickBookCard()}
       <div class="g2 mid" style="margin-top:20px">
         <section class="card companion"><h3>Already booked?</h3><p class="sub" style="margin-bottom:16px">Find your booking with its reference and your family name.</p>
-          <a class="btn btn-primary" href="#/retrieve">Retrieve booking</a></section>
-        ${exclCard(null)}
+          <a class="btn btn-primary" href="#/retrieve">Manage booking</a></section>
+        <section class="card companion"><h3>Join Cathay</h3><p class="sub" style="margin-bottom:16px">Create a free account to book, check in online and earn Asia Miles on every flight.</p>
+          <div class="row gap-sm"><a class="btn btn-primary" href="#/signup">Create account</a><a class="btn btn-ghost" href="#/signin">Sign in</a></div></section>
       </div></div>`;
   }
+  /* Asia Miles card for members who aren't verified students. */
+  function milesCard() {
+    return `<section class="card miles-card">
+      <span class="lab">Asia Miles</span><div class="pts-num">${pts(asiaMiles())}</div>
+      <div class="muted sm">Member ${esc(user.memberId)} · since ${esc(user.memberSince || '')}</div>
+      <a class="link" href="#/rewards">Points &amp; rewards${icon('ext')}</a></section>`;
+  }
+  /* Gentle, dismissible guide towards student verification. */
+  const studentBanner = () => `<a class="banner student-banner" href="#/discover">${icon('cap')}<span><b>University student?</b><br><span class="muted sm">Verify with your university email to unlock student seating, student points and perks.</span></span>${icon('arrow')}</a>`;
+  function memberHome() {
+    const next = upcoming()[0];
+    const h = new Date().getHours();
+    const greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    return `<div class="home ${next ? '' : 'noflight'}">
+      <header class="pagehead"><div><p class="crumb">Overview</p><h1><span class="g">${greet},</span> <span class="n">${esc(user.firstName)}</span></h1>
+        <p class="sub">Your trips and Asia Miles in one place.</p></div></header>
+      ${studentBanner()}
+      <div class="g2">${milesCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
+      ${quickBookCard()}
+      <div class="sect-head" style="margin-top:20px"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(activity()[0])}
+    </div>`;
+  }
+  /* Shown once after signing in when the member isn't a verified student yet. */
+  function studentPromo() {
+    document.querySelector('.modal-bg')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <div class="modal promo" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="promoTitle">
+          <div class="promo-hero"><span class="promo-badge">${icon('cap')} Cathay Student</span>
+            <h2 id="promoTitle">Studying at university?</h2>
+            <p>Verify your university email and your membership becomes a student membership. Free, in under a minute.</p></div>
+          <ul class="promo-list">
+            <li>${icon('seat')}<span><b>Fly next to students</b> from your university, seated automatically</span></li>
+            <li>${icon('gift')}<span><b>${PERKS.welcome.toLocaleString()} welcome points</b>, enough to choose your seat on Economy Light</span></li>
+            <li>${icon('up')}<span><b>1.5 student points</b> per mile on every trip home, 70% become Asia Miles when you graduate</span></li>
+            <li>${icon('plug')}<span><b>Free plug adapter</b> on your first flight to your university's country</span></li>
+          </ul>
+          <a class="btn btn-primary block" href="#/verify" data-action="modal-close">Verify my student email</a>
+          <a class="btn btn-ghost block" href="#/discover" data-action="modal-close">Discover student benefits</a>
+          <button class="link-btn block-link" data-action="modal-close">Not now</button>
+        </div>
+      </div>`);
+    $('.modal.promo .btn').focus();
+  }
+  /* Student benefits explainer (public). */
+  views.discover = () => `
+    <div class="narrow wide">
+      <header class="pagehead"><div><p class="crumb">Cathay Student</p><h1>One membership from your first flight to your first job</h1>
+        <p class="sub">For university students aged 18+, verified with a university email. Benefits are linked to your membership, not to promo codes.</p></div></header>
+      <div class="disc-grid">
+        ${[
+          ['seat', 'Student seating', 'Say yes once: at check-in you sit next to other students, from your university when possible. Names are never shown; universities only if a student chooses.'],
+          ['gift', 'Welcome bonus', `${PERKS.welcome.toLocaleString()} student points when you verify: enough to choose your seat on an Economy Light fare.`],
+          ['up', 'Student points', 'Earn 1.5 student points per mile on your flights. Spend them on Wi-Fi, seats and lounges; 70% of what is left becomes Asia Miles at graduation.'],
+          ['plug', 'Free travel adapter', "On your first flight to your university's country, handed to you by the crew. Once per study programme."],
+          ['share', 'Invite friends', `When a friend joins with your link, verifies and flies, you get ${PERKS.referralMiles.toLocaleString()} Asia Miles.`],
+          ['cap', 'Graduation gift', `One tier up for ${PERKS.boostMonths} months and ${PERKS.gradMiles.toLocaleString()} bonus miles, for your first work trips.`],
+          ['chat', 'Student flight chat', 'A moderated group chat for verified students on your flight, open 7 days before departure. Group only, no private messages.'],
+          ['tag', 'Student card (proposed)', 'A student card with our card partner: no income requirement, earns student points on everyday spending, upgrades at graduation. Concept only, not available.'],
+        ].map(([ic, h, p]) => `<div class="card disc">${icon(ic)}<h3>${h}</h3><p class="muted sm">${p}</p></div>`).join('')}
+      </div>
+      <div class="row gap-sm">${user ? (user.verified ? `<a class="btn btn-primary" href="#/rewards">See my student perks</a>` : `<a class="btn btn-primary" href="#/verify">Verify my student email</a>`) : `<a class="btn btn-primary" href="#/signup">Create an account</a>`}
+        <a class="btn btn-ghost" href="#/chat-safety">Chat safety &amp; privacy</a><a class="btn btn-ghost" href="#/parents">For parents</a></div>
+    </div>`;
 
   views.home = () => {
     if (!user) return signedOutHome();
+    if (!isStudent()) return memberHome();
     const next = upcoming()[0];
     const h = new Date().getHours();
     const greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
@@ -774,7 +849,7 @@
   /* Overview: book a flight without leaving the page first. */
   function quickBookCard() {
     return `<form id="quickBook" class="card quick-book">
-      <div class="qb-head">${icon('plane')}<div><h3>Book a flight</h3><p class="muted sm">Real Cathay schedules · student seating and points included</p></div></div>
+      <div class="qb-head">${icon('plane')}<div><h3>Book a flight</h3><p class="muted sm">${isStudent() ? 'Real Cathay schedules · student seating and points included' : 'Search real Cathay schedules'}</p></div></div>
       <div class="qb-fields">
         <label class="field"><span>From</span><select name="from">${airportOptions(search.from || 'HKG')}</select></label>
         <label class="field"><span>To</span><select name="to" required>${airportOptions(search.to, 'Going to…')}</select></label>
@@ -788,7 +863,7 @@
 
   function memberCard() {
     return `<div class="member">
-      <div class="row between"><span class="lab">Student member</span>${currentTier() !== user.tier ? `<span class="tier">${esc(currentTier())} · graduation gift</span>` : ''}</div>
+      <div class="row between"><span class="lab">${isStudent() ? 'Student member' : 'Member'}</span>${currentTier() !== user.tier ? `<span class="tier">${esc(currentTier())} · graduation gift</span>` : ''}</div>
       <div class="member-name">${esc(user.firstName)} ${esc(user.lastName)}${user.verified ? ' ' + tick() : ''}</div>
       <div class="mono">${esc(user.memberId)}</div>
       <div class="row between stats"><div><span class="lab">Student points</span><b>${pts(spLeft(perks()))}</b></div>
@@ -797,7 +872,16 @@
     </div>`;
   }
 
-  views.rewards = () => `
+  views.rewards = () => (isStudent() ? studentRewards() : `
+    <div class="narrow wide">
+      <header class="pagehead"><div><p class="crumb">Points &amp; rewards</p><h1>Your Asia Miles</h1>
+        <p class="sub">Earn on every Cathay flight and spend on flights, upgrades and more.</p></div></header>
+      ${milesCard()}
+      ${studentBanner()}
+      <div class="sect-head"><h3>Recent activity</h3></div>
+      <div class="stack" style="margin-top:0">${activity().length ? activity().map(activityRow).join('') : activityRow()}</div>
+    </div>`);
+  const studentRewards = () => `
     <div class="narrow wide">
       <header class="pagehead"><div><p class="crumb">Points &amp; rewards</p><h1>Your student points</h1>
         <p class="sub">Earn on flights, campus and partners; spend on student rewards; 70% of what's left becomes Asia Miles when you graduate.</p></div></header>
@@ -816,8 +900,8 @@
       ? `<div class="banner">${tick()}<span><b>Student status verified</b><br><span class="muted sm">Verified with ${esc(user.verified.email)}.</span></span></div>`
       : `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your .edu email to unlock student offers and earn a green tick.</span></span>${icon('arrow')}</a>`;
     return `<div class="narrow wide">
-      <header class="pagehead"><div><p class="crumb">Student offers</p><h1>Student offers</h1>
-        <p class="sub">Fares and perks picked for students flying from Hong Kong.</p></div></header>
+      <header class="pagehead"><div><p class="crumb">${isStudent() ? 'Student offers' : 'Offers'}</p><h1>${isStudent() ? 'Student offers' : 'Offers'}</h1>
+        <p class="sub">${isStudent() ? 'Fares and perks picked for students flying from Hong Kong.' : 'Fares from Hong Kong.'}</p></div></header>
       ${verify}<div class="offers" style="margin-top:0">${cards}</div></div>`;
   };
 
@@ -1085,13 +1169,16 @@
     </div>`;
   };
 
-  /* Demo / operations view: sell seats and watch the planner re-seat students. */
+  /* Live, read-only view of student seating on one flight: real passengers only. Students are ★ (never a name);
+   * hover shows their university only if they chose to share it. Not offered on Economy Light. */
   const planner = { key: '', log: [], moved: new Set() };
+  const plannerAllowed = (t, i) => t.cabin === 'Economy' && seatRule(t.cabin, t.segments[i].fare || t.fare) !== 'paid';
   views.planner = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx || 0), s = t && t.segments[i];
     if (!t || !s) return notFound();
+    if (!plannerAllowed(t, i)) return redirect('#/trip/' + ref);
     const p = seatPlan(t, i), c = p.cabin;
-    seatCtx = { t, i, p };
+    seatCtx = { t, i, p, c };
     if (planner.key !== SZ.flightKey(s)) Object.assign(planner, { key: SZ.flightKey(s), log: [], moved: new Set() });
     if (p.live) { planner.log = p.live.log.map(esc); planner.moved = new Set(p.moved.map((m) => p.seatOf[m.id])); }
     const groupOf = {};
@@ -1100,9 +1187,9 @@
       const x = p.at[id], moved = planner.moved.has(id) ? ' moved' : '';
       if (x) {
         const g = groupOf[id], kind = x.me ? 'mine' : g.members.length < 2 ? 'solo' : g.sameUni ? 'stu' : 'mix';
-        return seatEl(id, kind + moved, x.me ? 'You' : '★', x.locked ? '' : 'plan-sell', x.me ? ', you' : ', Student · ' + uniLabel(x), x.me ? '' : 'Student · ' + uniLabel(x) + (x.locked ? ' · checked in' : ''));
+        return seatEl(id, kind + moved, x.me ? 'You' : '★', '', x.me ? ', you' : ', Student · ' + uniLabel(x), x.me ? 'You' + (x.locked ? ' · checked in' : ' · planned seat') : 'Student · ' + uniLabel(x) + (x.locked ? ' · checked in' : ''));
       }
-      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', paying passenger') : seatEl(id, 'free', '', 'plan-sell', ', free');
+      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', passenger') : seatEl(id, 'free', '', '', ', free');
     };
     const multi = p.groups.filter((g) => g.members.length > 1);
     const alone = p.students.filter((x) => p.seatOf[x.id] && !p.neighboursOf(x).length).length;
@@ -1110,23 +1197,22 @@
     return `
     <div class="narrow wide">
       ${backLink('#/trip/' + ref, 'Back to trip')}
-      <p class="eyebrow">Demo · operations view</p>
-      <h1>Student seating planner</h1>
+      <p class="eyebrow">${p.live ? 'Live · updates as passengers book and check in' : 'This device only (offline)'}</p>
+      <h1>Student seating on this flight</h1>
       <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)}${t.segments.length > 1 ? ' · ' + t.segments.map((x, j) => j === i ? `<b>${x.from}→${x.to}</b>` : `<a href="#/planner/${t.ref}/${j}">${x.from}→${x.to}</a>`).join(' | ') : ''}</p>
       <div class="seat-layout">
-        <div>${legend([['lg-stu', 'Students, same university'], ['lg-mix', 'Students, mixed'], ['lg-solo', 'Student alone'], ['lg-mine', 'You'], ['lg-taken', 'Paying passenger'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
+        <div>${legend([['lg-stu', 'Students, same university'], ['lg-mix', 'Students, mixed'], ['lg-solo', 'Student alone'], ['lg-mine', 'You'], ['lg-taken', 'Other passenger'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
         <div class="seat-side">
-          <div class="card sm"><b>Tap any seat to sell it to a paying passenger.</b>
-            <span class="muted">Verified students are seated automatically in groups of 2–3 side by side, from the same university when possible; every other seat stays on sale. If a seat planned for a student is sold, the planner re-runs and moves only that student's group.</span></div>
+          <div class="card sm"><b>Real bookings only.</b>
+            <span class="muted">Verified students who said yes are seated in groups of 2–3 side by side, from the same university when possible. Every other seat stays on sale: if another passenger chooses a seat planned for a student, only that student's group moves. Hover a ★ to see a university, if the student chose to share it.</span></div>
           <div class="card plan-stats">
             <div><b>${p.students.length}</b><span>students</span></div><div><b>${multi.length}</b><span>groups</span></div>
             <div><b>${multi.filter((g) => g.sameUni).length}</b><span>same uni</span></div><div><b>${alone}</b><span>alone</span></div>
           </div>
           <div class="card"><h3>Changes</h3>
-            ${planner.log.length ? planner.log.map((l) => `<p class="sm plan-log">${l}</p>`).join('') : '<p class="muted sm">No seats sold yet.</p>'}
-            <button class="btn btn-ghost block sm-btn" data-action="plan-reset">Reset this flight</button></div>
+            ${planner.log.length ? planner.log.map((l) => `<p class="sm plan-log">${l}</p>`).join('') : '<p class="muted sm">No re-seating so far.</p>'}</div>
           <div class="card"><h3>Student groups</h3>
-            ${p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => (m.me ? 'You' : '★')).join(' ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc((g.members.find((m) => m.shownUni) || {}).shownUni || 'same university') : 'mixed'}</b></div>`).join('')}</div>
+            ${p.groups.length ? p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => (m.me ? 'You' : '★')).join(' ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc((g.members.find((m) => m.shownUni) || {}).shownUni || 'same university') : 'mixed'}</b></div>`).join('') : '<p class="muted sm">No students on this flight yet.</p>'}</div>
         </div>
       </div>
     </div>`;
@@ -1170,6 +1256,7 @@
           : `<p class="muted" style="margin-top:0">Confirm a university email (.edu) to get a green tick next to your name.</p>
              <a class="btn btn-primary block" href="#/verify">Verify student status</a>`}
       </div>
+      ${user.moderator ? `<a class="btn btn-ghost block" href="#/moderation">${icon('info')} Chat reports (moderator)</a>` : ''}
       <form id="prefsForm" class="card form">
         <h3>Travel preferences</h3>
         <div class="two">
@@ -1278,7 +1365,7 @@
 
   views.signin = () => `
     <div class="signin">
-      <div class="signin-brand"><h1>Cathay Student</h1><p>Earn points, unlock student offers and manage your flights.</p></div>
+      <div class="signin-brand"><h1>Cathay</h1><p>Book flights, manage your trips and earn Asia Miles.</p></div>
       <div class="narrow">
         <h1 class="mob-only">Sign in</h1>
         <form id="signinForm" class="card form">
@@ -1296,7 +1383,7 @@
     const invite = store.get('invite', '');
     return `
     <div class="signin">
-      <div class="signin-brand"><h1>Join Cathay Student</h1><p>One membership from your first flight: student seating, student points and perks.</p></div>
+      <div class="signin-brand"><h1>Join Cathay</h1><p>A free membership: book flights, check in online and earn Asia Miles.</p></div>
       <div class="narrow">
         <h1 class="mob-only">Create an account</h1>
         <form id="signupForm" class="card form">
@@ -1313,7 +1400,7 @@
           <button class="btn btn-primary block" type="submit">Create account</button>
           <a class="btn btn-ghost block" href="#/signin">I already have an account</a>
         </form>
-        <p class="muted sm center">You can verify your student status after signing up.${!LIVE.on ? ' Offline mode: this account is stored in this browser only.' : ''}</p>
+        <p class="muted sm center">University student? You can verify your student status after signing up.${!LIVE.on ? ' Offline mode: this account is stored in this browser only.' : ''}</p>
       </div></div>`;
   };
 
@@ -1374,6 +1461,10 @@
              ${(p.redeemed || []).length ? `<p class="muted sm">Added: ${p.redeemed.map((r) => `${esc(rewardName(r.id))} (${esc(r.ref)})`).join(', ')}</p>` : ''}`}
       </div>
 
+      <div class="card perk concept">
+        <div class="perk-head">${icon('tag')}<div><h3>Cathay Student card <span class="badge">Concept</span></h3><p class="muted sm">Proposed with Cathay's card partner: a student account and card with no income requirement for verified full-time students, earning student points on everyday spending (not just flights), with low limits and a debit option. It upgrades to the regular Cathay card at graduation. Not available: shown to illustrate the idea.</p></div></div>
+      </div>
+
       <div class="card perk">
         <div class="perk-head">${icon('cap')}<div><h3>Graduation gift</h3><p class="muted sm">When you graduate, we celebrate with you.</p></div></div>
         ${p.graduated
@@ -1405,123 +1496,245 @@
   };
 
   /* ---------- flight chat (transports live in chat.js) ---------- */
-  const CHAT = window.AureliaChat;
+  /* ---------- student flight chat (chat-server.js enforces every rule server-side) ---------- */
   let chatConn = null;
   function chatLeave() { if (chatConn) { chatConn.close(); chatConn = null; } }
-  const chatName = () => store.get('chatName', '') || (user ? `${user.firstName} ${user.lastName[0]}.` : 'Guest');
+  const REPORT_REASONS = [['harassment', 'Harassment'], ['sexual', 'Sexual advances or content'], ['discrimination', 'Discrimination or hate'], ['bullying', 'Bullying'], ['threat', 'Threats or violence'], ['impersonation', 'Impersonation'], ['doxxing', 'Sharing personal information'], ['spam', 'Spam'], ['solicitation', 'Unwanted selling or solicitation'], ['other', 'Something else']];
+  const GUIDELINES = [
+    'Be respectful. No harassment, bullying, threats or discrimination of any kind.',
+    'No sexual comments or advances.',
+    "Don't pretend to be someone else, and don't share anyone's personal information (yours included: no phone numbers, addresses or seat numbers).",
+    'No spam, selling or recruiting.',
+    'Group conversation only: there are no private messages.',
+    'Two-strike rule: a first confirmed violation gives you a warning; a second cancels your booking on this flight with no refund.',
+  ];
 
-  // One room per flight and day: everyone booked on CX 521 on 1 Dec lands in the same room.
+  // One room per flight and day, open 7 days before departure to verified students (18+) booked on that flight.
   views.chat = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx) || 0, s = t && t.segments[i];
-    const room = s && CHAT ? CHAT.roomFor(s.number, s.dep) : '';
-    if (!room) return notFound();
+    if (!s) return notFound();
     return `<div class="narrow fc-page">
       ${backLink('#/trip/' + t.ref, 'Back to booking')}
-      <section class="card fc" id="fcBox" data-room="${room}">
+      <section class="card fc" id="fcBox" data-fid="${esc(liveId(s))}">
         <header class="fc-head">
-          <div><p class="lab">Flight chat</p><h1>${esc(s.number)} · ${esc(s.from)} → ${esc(s.to)}</h1><p class="muted sm">${esc(fmtDate(s.dep))}</p></div>
-          <span class="fc-stat" id="fcStat" data-state="connecting">Connecting…</span>
+          <div><p class="lab">Student flight chat</p><h1>${esc(s.number)} · ${esc(s.from)} → ${esc(s.to)}</h1><p class="muted sm">${esc(fmtDate(s.dep))} · group chat for verified students on this flight</p></div>
+          <span class="fc-stat" id="fcStat" data-state="connecting">Checking…</span>
         </header>
-        <div class="fc-log" id="fcLog" role="log" aria-label="Flight chat messages"></div>
-        <p class="fc-as sm muted">Chatting as <b id="fcAs"></b> <button type="button" class="fc-link" id="fcRename">Change name</button></p>
-        <form class="fc-name" id="fcNameForm" hidden><input id="fcName" maxlength="30" placeholder="Your name in this chat" aria-label="Your name in this chat"><button class="btn btn-ghost" type="submit">Save</button></form>
-        <form class="fc-compose" id="fcForm" autocomplete="off"><input id="fcInput" maxlength="${CHAT.MAX_TEXT}" placeholder="Message your flight…" aria-label="Message" enterkeyhint="send"><button class="btn btn-primary" type="submit">Send</button></form>
+        <div id="fcGate"></div>
+        <div class="fc-log" id="fcLog" role="log" aria-label="Flight chat messages" hidden></div>
+        <form class="fc-compose" id="fcForm" autocomplete="off" hidden><input id="fcInput" maxlength="500" placeholder="Message the students on your flight…" aria-label="Message" enterkeyhint="send"><button class="btn btn-primary" type="submit">Send</button></form>
+        <p class="fc-foot sm muted" id="fcFoot" hidden>Visible to verified students on this flight: your first name${t.showUni ? ' and university' : ''}. <a href="#/chat-safety">Safety &amp; privacy</a> · <button type="button" class="fc-link" id="fcLeave">Leave chat</button></p>
       </section></div>`;
   };
 
-  // Everything the user or the network supplies goes in through textContent, never innerHTML.
-  function mountChat() {
+  // Everything the network supplies goes in through textContent, never innerHTML.
+  async function mountChat() {
     const box = $('#fcBox');
-    if (!box || !CHAT) return;
-    const room = box.dataset.room, log = $('#fcLog'), stat = $('#fcStat'), input = $('#fcInput');
-    const LABEL = { connecting: 'Connecting…', ready: 'Live', reconnecting: 'Reconnecting…', error: 'Chat unavailable', local: 'Demo · this browser only' };
+    if (!box) return;
+    const fid = box.dataset.fid, gate = $('#fcGate'), log = $('#fcLog'), stat = $('#fcStat'), form = $('#fcForm'), input = $('#fcInput');
     const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
-    const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-    let conn = null, lastSend = 0, lastState = '';
-
-    log.appendChild(el('div', 'fc-note', CHAT.live
-      ? 'Say hello to the students on your flight. Be kind and keep personal details private. Messages are not stored: you see what is sent while you are here.'
-      : 'Demo mode: messages stay in this browser. Open this page in a second tab to try it. Deploy the chat service (aws/chat-deploy.sh) to talk across devices.'));
+    const setStat = (state, label) => { stat.dataset.state = state; stat.textContent = label; };
+    if (!liveAccount()) {
+      setStat('error', 'Unavailable');
+      gate.innerHTML = '<div class="fc-note">The student chat needs an online account (it runs on the Cathay server).</div>';
+      return;
+    }
+    const st = await authCall('GET', `/chat/${fid}/status`);
+    if (!$('#fcBox')) return;
+    if (!st.ok || !st.eligible) {
+      setStat('error', 'Not available');
+      gate.innerHTML = `<div class="fc-note">${esc(st.reason || st.error || 'The chat is not available.')}</div>${!user.verified ? '<a class="btn btn-primary" href="#/verify">Verify my student email</a>' : ''}`;
+      return;
+    }
+    if (!st.member) {
+      setStat('ready', 'Not joined');
+      gate.innerHTML = `<div class="fc-rules">
+        <h3>Before you join</h3>
+        <p class="muted sm">Joining is optional. You can leave at any time, and you can privately ask not to be seated next to anyone here.</p>
+        <ul>${GUIDELINES.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>
+        <p class="muted sm">Messages are deleted 48 hours after the flight arrives. Reported messages are kept separately for moderators while a report is investigated. <a href="#/chat-safety">Read the full safety &amp; privacy notice</a>.</p>
+        <label class="check sm"><input type="checkbox" id="fcAccept"> I accept the student chat guidelines</label>
+        <button class="btn btn-primary block" id="fcJoin" disabled>Join the chat</button></div>`;
+      $('#fcAccept').addEventListener('change', (e) => { $('#fcJoin').disabled = !e.target.checked; });
+      $('#fcJoin').addEventListener('click', async () => {
+        const r = await authCall('POST', `/chat/${fid}/join`, { acceptGuidelines: true });
+        if (!r.ok) return toast(r.error || 'Could not join.');
+        mountChat();
+      });
+      return;
+    }
+    const h = await authCall('GET', `/chat/${fid}/messages`);
+    if (!$('#fcBox')) return;
+    if (!h.ok) { setStat('error', 'Unavailable'); gate.innerHTML = `<div class="fc-note">${esc(h.error || 'Chat unavailable.')}</div>`; return; }
+    gate.innerHTML = h.warning ? '<div class="fc-warn">You have one warning for breaking the student chat guidelines. A second confirmed violation cancels your booking on this flight with no refund.</div>' : '';
+    log.hidden = false; form.hidden = false; $('#fcFoot').hidden = false;
+    log.replaceChildren(el('div', 'fc-note', 'Say hello to the students on your flight. Group chat only. Keep personal details (phone, address, seat) private. Messages are deleted 48 hours after arrival.'));
 
     function addMsg(m) {
-      const mine = m.sid === CHAT.sid, stick = mine || nearBottom();
+      const mine = m.author === h.me, stick = mine || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
       const row = el('div', 'fc-msg' + (mine ? ' mine' : ''));
       row.dataset.id = m.id;
       const body = el('div', 'fc-body'), meta = el('div', 'fc-meta');
       meta.appendChild(el('b', '', mine ? 'You' : m.name));
-      if (m.verified) meta.insertAdjacentHTML('beforeend', tick());          // static markup, no user data
+      meta.insertAdjacentHTML('beforeend', tick());
       if (m.uni) meta.appendChild(el('span', 'fc-uni', m.uni));
       meta.appendChild(el('time', '', new Date(m.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })));
       body.appendChild(meta);
       body.appendChild(el('p', 'fc-text', m.text));
-      if (!mine) row.appendChild(el('span', 'fc-av c' + (hash(m.sid) % 6), (Array.from(m.name)[0] || '?').toUpperCase()));
+      if (!mine) {
+        const tools = el('div', 'fc-tools');
+        const rep = el('button', 'fc-link', 'Report'); rep.type = 'button';
+        rep.addEventListener('click', () => reportDialog(fid, m.id));
+        const av = el('button', 'fc-link', "Don't seat me next to them"); av.type = 'button';
+        av.addEventListener('click', async () => {
+          const r = await authCall('POST', `/chat/${fid}/avoid`, { messageId: m.id });
+          toast(r.ok ? r.message : r.error || 'Not possible.');
+        });
+        tools.append(rep, av);
+        body.appendChild(tools);
+        row.appendChild(el('span', 'fc-av c' + (hash(m.author) % 6), (Array.from(m.name)[0] || '?').toUpperCase()));
+      }
       row.appendChild(body);
       log.appendChild(row);
       if (stick) log.scrollTop = log.scrollHeight;
-      return row;
     }
-
-    function push(m, row) {
-      conn.send(m).catch(() => {
-        row.classList.add('failed');
-        const b = el('button', 'fc-fail', 'Not sent · Retry');
-        b.type = 'button';
-        b.addEventListener('click', () => { b.remove(); row.classList.remove('failed'); push(m, row); });
-        row.querySelector('.fc-body').appendChild(b);
-      });
-    }
-
-    conn = chatConn = CHAT.join(room, {
-      onMessage: addMsg,
-      onStatus: ({ state, detail }) => {
-        stat.dataset.state = state;
-        stat.textContent = LABEL[state] || state;
-        stat.title = detail || '';
-        if (state === 'error' && lastState !== 'error') toast('Chat: ' + (detail || 'the service is not reachable.'));
-        lastState = state;
-      },
-    });
-    conn.history.forEach(addMsg);
+    h.messages.forEach(addMsg);
     log.scrollTop = log.scrollHeight;
 
-    $('#fcAs').textContent = chatName();
-    $('#fcRename').addEventListener('click', () => {
-      const f = $('#fcNameForm'), n = $('#fcName');
-      f.hidden = !f.hidden;
-      if (!f.hidden) { n.value = chatName(); n.focus(); n.select(); }
+    const es = new EventSource(`${API}/api/chat/${fid}/stream?ticket=${h.ticket}`);
+    chatConn = es;
+    setStat('connecting', 'Connecting…');
+    es.onopen = () => setStat('ready', 'Live');
+    es.addEventListener('message', (e) => { try { addMsg(JSON.parse(e.data)); } catch {} });
+    es.addEventListener('deleted', (e) => { try { const id = JSON.parse(e.data).id; const n = log.querySelector(`[data-id="${CSS.escape(id)}"]`); if (n) n.remove(); } catch {} });
+    es.addEventListener('warning', (e) => { try { gate.innerHTML = ''; gate.appendChild(el('div', 'fc-warn', JSON.parse(e.data).text)); } catch {} });
+    es.addEventListener('removed', (e) => {
+      es.close(); chatConn = null;
+      let why = 'You left the chat.'; try { why = JSON.parse(e.data).reason; } catch {}
+      log.hidden = true; form.hidden = true; $('#fcFoot').hidden = true;
+      gate.replaceChildren(el('div', 'fc-note', why)); setStat('error', 'Closed');
     });
-    $('#fcNameForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      store.set('chatName', $('#fcName').value.trim().slice(0, 30));
-      $('#fcAs').textContent = chatName();
-      e.currentTarget.hidden = true;
-      input.focus();
-    });
-    $('#fcForm').addEventListener('submit', (e) => {
+    es.onerror = () => { if (es.readyState === 2) { setStat('error', 'Disconnected'); chatConn = null; } else setStat('connecting', 'Reconnecting…'); };
+
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const text = input.value.trim();
       if (!text) return;
-      if (Date.now() - lastSend < 700) { toast('Slow down a little.'); return; }
-      lastSend = Date.now();
-      const m = CHAT.makeMessage({
-        room, text, name: chatName(),
-        uni: user && user.verified ? SZ.universityFromEmail(user.verified.email) : '',
-        verified: !!(user && user.verified),
-      });
-      if (!m) return;
       input.value = '';
-      push(m, addMsg(m));
+      const r = await authCall('POST', `/chat/${fid}/messages`, { text });
+      if (!r.ok) { toast(r.error || 'Not sent.'); input.value = text; }
       input.focus();
+    });
+    $('#fcLeave').addEventListener('click', async () => {
+      if (!confirm('Leave this chat? You can join again later.')) return;
+      await authCall('POST', `/chat/${fid}/leave`, {});
+      chatLeave(); toast('You left the chat.'); render();
     });
     if (window.matchMedia && matchMedia('(pointer:fine)').matches) input.focus();
   }
+
+  function reportDialog(fid, messageId) {
+    document.querySelector('.modal-bg')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <form class="modal report" data-action="noop" id="reportForm" role="dialog" aria-modal="true" aria-labelledby="repTitle">
+          <h2 id="repTitle">Report this message</h2>
+          <p class="muted sm">A moderator will review it. The person is not told who reported them.</p>
+          <label class="field"><span>What's wrong?</span><select name="category">${REPORT_REASONS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+          <label class="field"><span>Anything else? (optional)</span><textarea name="note" maxlength="500" rows="3"></textarea></label>
+          <p class="muted sm">In danger or threatened? Tell the crew or airport staff now, or call 999 in Hong Kong.</p>
+          <button class="btn btn-primary block" type="submit">Send report</button>
+          <button class="btn btn-ghost block" type="button" data-action="modal-close">Cancel</button>
+        </form>
+      </div>`);
+    $('#reportForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const r = await authCall('POST', `/chat/${fid}/report`, { messageId, category: f.get('category'), note: f.get('note') });
+      $('.modal-bg')?.remove();
+      toast(r.ok ? r.message : r.error || 'Could not send the report.');
+    }, { once: true });
+  }
+
+  /* Moderators (accounts listed in MODERATORS on the server): review reports and decide. */
+  views.moderation = () => {
+    if (!user || !user.moderator) return `<div class="narrow"><div class="card empty">Moderators only.</div></div>`;
+    return `<div class="narrow wide"><header class="pagehead"><div><p class="crumb">Safety</p><h1>Chat reports</h1>
+      <p class="sub">Severity: low (rude) · medium (harassment, spam) · high (sexual, discrimination, doxxing) · critical (threats, safety). 1st confirmed violation = warning; 2nd = booking cancelled, no refund; critical = also removed from the chat and escalated to security.</p></div></header>
+      <div id="modList" class="stack"><p class="muted">Loading…</p></div></div>`;
+  };
+  async function loadReports() {
+    const box = $('#modList'); if (!box) return;
+    const r = await authCall('GET', '/mod/reports');
+    if (!r.ok) { box.textContent = r.error || 'Could not load reports.'; return; }
+    if (!r.reports.length) { box.innerHTML = '<div class="card empty">No reports.</div>'; return; }
+    box.innerHTML = r.reports.map((x) => `<div class="card mod-card">
+      <div class="row between"><b>${esc(x.category)} · ${esc(x.flight ? x.flight.number + ' ' + x.flight.dep.slice(0, 10) : x.fid)}</b><span class="badge">${esc(x.status)}${x.outcome ? ' · ' + esc(x.outcome) : ''}</span></div>
+      <p class="muted sm">Reported: ${esc(x.reportedName || '?')} · previous strikes: ${x.strikes} · ${esc(x.at.slice(0, 16).replace('T', ' '))}${x.note ? ' · note: ' + esc(x.note) : ''}</p>
+      <div class="mod-ev">${x.evidence.map((m) => `<p class="sm${m.id === x.msgId ? ' hit' : ''}"><b>${esc(m.name || '?')}</b> ${esc(m.text)}</p>`).join('')}</div>
+      ${x.status === 'open' ? `<div class="row gap-sm mod-act" data-id="${x.id}">
+        <select class="mod-sev">${['low', 'medium', 'high', 'critical'].map((s) => `<option ${s === x.severity ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <label class="check sm"><input type="checkbox" class="mod-hold"> Legal hold</label>
+        <button class="btn btn-primary sm-btn" data-mod="warn">Confirm violation</button>
+        <button class="btn btn-ghost sm-btn" data-mod="dismiss">Dismiss</button></div>` : ''}</div>`).join('');
+    box.querySelectorAll('[data-mod]').forEach((b) => b.addEventListener('click', async () => {
+      const act = b.closest('.mod-act');
+      if (b.dataset.mod === 'warn' && !confirm('Confirm this violation? A second confirmed violation cancels the booking with no refund.')) return;
+      const res = await authCall('POST', '/mod/reports/' + act.dataset.id, { decision: b.dataset.mod, severity: act.querySelector('.mod-sev').value, legalHold: act.querySelector('.mod-hold').checked });
+      toast(res.ok ? 'Decision saved: ' + res.outcome : res.error || 'Failed.'); loadReports();
+    }));
+  }
+
+  /* Safety & privacy notice for students (public). */
+  views['chat-safety'] = () => `
+    <div class="narrow wide legal"><header class="pagehead"><div><p class="crumb">Student flight chat</p><h1>Safety &amp; privacy</h1>
+      <p class="sub">How the student chat works, what we collect and what happens if someone breaks the rules.</p></div></header>
+      <div class="card"><h3>Who can join</h3><ul>
+        <li>Students aged 18+ who verified a university email with a one-time code, signed in, and booked on that flight.</li>
+        <li>Joining is optional and you can leave at any time. It opens 7 days before departure.</li>
+        <li>Group conversation only: there are no private or one-to-one messages.</li>
+        <li><b>Limits:</b> a university email shows that someone has access to that university's email system. It does not prove identity, enrolment or character. Treat people you meet online with care.</li></ul></div>
+      <div class="card"><h3>What others see, and what they don't</h3><ul>
+        <li>Others see your first name, a verified tick and, only if you chose to share it when booking, your university.</li>
+        <li>Never your surname, email, booking reference, seat number or seating preferences.</li>
+        <li>You can privately ask not to be seated next to someone in the chat. Nobody is told, and nobody can ask to sit next to a particular person.</li></ul></div>
+      <div class="card"><h3>Guidelines</h3><ul>${GUIDELINES.map((g) => `<li>${esc(g)}</li>`).join('')}</ul></div>
+      <div class="card"><h3>Reporting and moderation</h3><ul>
+        <li>Use <b>Report</b> on any message. The reported person is never told who reported them, and retaliation is itself a violation.</li>
+        <li>A moderator reviews each report, sets a severity (low, medium, high, critical) and either dismisses it or confirms a violation. Confirmed messages are removed for everyone.</li>
+        <li>1st confirmed violation: warning. 2nd: removed from the chat and the booking on that flight is cancelled with no refund. Critical cases (threats, safety): removed from the chat immediately and escalated to the airline's security team (and the police where needed).</li>
+        <li>In danger now? Tell the crew or airport staff, or call 999 in Hong Kong.</li></ul></div>
+      <div class="card"><h3>Your data</h3><ul>
+        <li>We use your account (name, email, date of birth), your verified university email and your booking only to check eligibility and run the chat.</li>
+        <li>Messages are deleted 48 hours after the flight arrives (scheduled arrival in this prototype).</li>
+        <li>If a message is reported, it and the messages around it are copied to a separate store that only moderators can access, kept for up to ${180} days (30 days if the report is dismissed), longer only under a legal hold.</li>
+        <li>You can ask for a copy of, or correction to, your personal data (Hong Kong PDPO data access and correction requests).</li></ul></div>
+      <p class="muted sm">Prototype notice: these rules, retention periods and the two-strike cancellation policy are proposals for review by qualified Hong Kong legal counsel and the airline's safeguarding team. They are not a statement of legal compliance.</p>
+      <a class="btn btn-ghost" href="#/parents">Information for parents</a>
+    </div>`;
+
+  /* Parent-facing FAQ (public). Parents don't get access to adult students' conversations. */
+  views.parents = () => `
+    <div class="narrow wide legal"><header class="pagehead"><div><p class="crumb">For parents</p><h1>Student flight chat: questions from parents</h1></div></header>
+      ${[
+        ['Who can use it?', 'Only students aged 18 or over, verified with a one-time code sent to a university email address, signed in to their own account and booked on that flight. Under-18s cannot join.'],
+        ['Can strangers message my child privately?', 'No. There are no private or one-to-one messages: only one group conversation per flight, visible to all verified students on it.'],
+        ["What do others see about my child?", 'Their first name and, only if they choose, their university. Never their surname, contact details, seat number or booking.'],
+        ['Will they be seated next to someone from the chat?', 'Student seating is optional. Students can privately ask not to sit next to someone; nobody can ask to sit next to a particular person.'],
+        ['How is behaviour moderated?', 'Every message can be reported. Moderators review reports by severity. A first confirmed violation is a warning; a second cancels that booking with no refund. Threats are escalated to the airline security team and, where needed, the police.'],
+        ['How long are messages kept?', 'Messages are deleted 48 hours after the flight arrives. Reported messages are kept separately and only for as long as an investigation or legal obligation requires.'],
+        ['Can I read my child’s messages?', 'No. Students using the chat are adults, so their conversations are private to the participants and to moderators reviewing a report.'],
+        ['What are the limits?', 'Verification shows that someone has access to a university email; it is not an identity check. We encourage students to keep personal details private and to tell crew or staff about any concern.'],
+      ].map(([q, a]) => `<div class="card"><h3>${q}</h3><p class="muted">${a}</p></div>`).join('')}
+      <p class="muted sm">Prototype notice: policies shown here are proposals for review by Hong Kong legal counsel and the airline's safeguarding team.</p>
+    </div>`;
 
   const notFound = () => `<div class="narrow"><div class="card empty">We couldn't find that page. <a href="#/home">Go home</a></div></div>`;
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation']);
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -1539,16 +1752,19 @@
     renderChrome(NAV_GROUP[name]);
     window.scrollTo(0, 0);
     if (name === 'chat') mountChat();
+    if (name === 'moderation') loadReports();
     liveSync();
   }
 
   function renderChrome(active) {
+    document.querySelectorAll('.brand-sub').forEach((el) => { el.textContent = isStudent() ? 'student' : 'flights & rewards'; });
+    document.querySelectorAll('.nav-offers').forEach((el) => { el.textContent = isStudent() ? 'Student offers' : 'Offers'; });
     document.querySelectorAll('[data-nav]').forEach((el) => el.classList.toggle('on', el.dataset.nav === active));
     const ini = user ? esc(user.firstName[0] + user.lastName[0]) : '';
     const slot = $('#userSlot');
     slot.href = user ? '#/profile' : '#/signin';
     slot.innerHTML = user
-      ? `<span class="avatar">${ini}${user.verified ? tick('tick-av') : ''}</span><div><b>${esc(user.firstName)} ${esc(user.lastName[0])}.${user.verified ? ' ' + tick() : ''}</b><span class="s">${currentTier() !== user.tier ? esc(currentTier()) + ' · graduation gift' : 'Student member'}</span></div>`
+      ? `<span class="avatar">${ini}${user.verified ? tick('tick-av') : ''}</span><div><b>${esc(user.firstName)} ${esc(user.lastName[0])}.${user.verified ? ' ' + tick() : ''}</b><span class="s">${currentTier() !== user.tier ? esc(currentTier()) + ' · graduation gift' : isStudent() ? 'Student member' : 'Cathay member'}</span></div>`
       : `<span class="avatar">${icon('user')}</span><div><b>Sign in / up</b><span class="s">See your points and flights</span></div>`;
     const m = $('#mAvatar');
     m.href = user ? '#/profile' : '#/signin';
@@ -1632,31 +1848,6 @@
       p.seatBuys = [...(p.seatBuys || []), { ref: t.ref, i, with: w, amount: w === 'sp' ? PERKS.seatSp : PERKS.seatMiles, at: toISO(new Date()) }];
       savePerks(p); rerender();
       flashTick(`Seat choice unlocked · −${(w === 'sp' ? PERKS.seatSp : PERKS.seatMiles).toLocaleString()} ${w === 'sp' ? 'student points' : 'Asia Miles'}`);
-    },
-    async 'plan-sell'(el) {
-      const { t, i, p: before } = seatCtx, id = el.dataset.seat, key = SZ.flightKey(t.segments[i]);
-      if (before.live) {
-        const r = await liveCall('/flights/' + before.live.id + '/seats/' + id, {});
-        if (!r.ok) toast(r.error || 'Could not sell that seat.');
-        return;
-      }
-      const sales = store.get('sales', {});
-      sales[key] = [...(sales[key] || []), id];
-      store.set('sales', sales);
-      const after = seatPlan(t, i), x = before.at[id];
-      const moves = after.moved.map((m) => `${m.me ? 'you ' : ''}${before.seatOf[m.id]} → ${after.seatOf[m.id]}`);
-      planner.moved = new Set(after.moved.map((m) => after.seatOf[m.id]));
-      planner.log.unshift(`<b>${id}</b> sold to a paying passenger${x ? ` (planned for ${x.me ? 'you' : 'a student'})` : ''}. ${moves.length ? `Re-seated ${moves.length} student${moves.length > 1 ? 's' : ''}: ` + moves.join(', ') + '.' : 'No student had to move.'}`);
-      const y = window.scrollY; render(); window.scrollTo(0, y);
-    },
-    'plan-reset'() {
-      const { t, i, p } = seatCtx, key = SZ.flightKey(t.segments[i]);
-      if (p.live) { liveCall('/flights/' + p.live.id + '/reset', {}); return; }
-      const sales = store.get('sales', {}), plans = store.get('seatplans', {});
-      delete sales[key]; delete plans[key];
-      store.set('sales', sales); store.set('seatplans', plans);
-      Object.assign(planner, { log: [], moved: new Set() });
-      const y = window.scrollY; render(); window.scrollTo(0, y);
     },
     cancel(el) {
       if (!confirm('Cancel this booking? (demo)')) return;
@@ -1831,7 +2022,8 @@
   /* ---------- student verification ---------- */
   async function apiPost(path, body) {
     try {
-      const res = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const authz = session() && !isLocalAccount() ? { Authorization: 'Bearer ' + session() } : {}; // lets the server record student status on the account
+      const res = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authz }, body: JSON.stringify(body) });
       let data = null;
       try { data = await res.json(); } catch (_) {}
       if (!data || typeof data.ok === 'undefined') return { unreachable: true }; // e.g. static hosting returns HTML/404
@@ -1896,7 +2088,7 @@
   }
 
   /* ---------- boot ---------- */
-  window.addEventListener('hashchange', render);
+  window.addEventListener('hashchange', () => { document.querySelector('.modal-bg')?.remove(); render(); });
   window.addEventListener('DOMContentLoaded', () => {
     loadState();
     render();

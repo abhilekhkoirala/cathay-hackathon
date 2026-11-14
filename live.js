@@ -63,7 +63,8 @@ const soldOf = (f, cabin = 'Economy') => Object.keys(f.sales).filter((s) => SZ.a
 
 /* Re-runs the student planner with everything sold so far; only students whose group broke move. */
 function replan(f) {
-  const p = SZ.plan(f.seg, { real: studentsOf(f), sold: soldOf(f), prev: f.plan });
+  const apart = Object.entries(f.avoid || {}).flatMap(([a, list]) => list.map((b) => [pseudo(a, f.id), pseudo(b, f.id)])); // [asker, other]: the planner moves the other person, never the one who asked
+  const p = SZ.plan(f.seg, { real: studentsOf(f), sold: soldOf(f), prev: f.plan, apart });
   const moved = p.moved.map((m) => `${f.plan[m.id]} → ${p.seatOf[m.id]}`);
   f.plan = { ...p.seatOf };
   f.v++;
@@ -185,6 +186,9 @@ router.post('/flights/:id/pax', auth, (req, res) => {
   const f = ID_RE.test(id) && getFlight(id, cleanSeg(b.seg));
   if (!f) return res.status(400).json({ ok: false, error: 'Bad flight.' });
   const uid = req.user.id, cabin = D.CABINS.includes(b.cabin) ? b.cabin : 'Economy';
+  if (((db.chat || {}).removed || {})[id] && db.chat.removed[id][uid] && ((db.chat.strikes || {})[uid] || []).length >= 2) {
+    return res.status(403).json({ ok: false, error: 'This booking was cancelled for breaking the student chat guidelines.' });
+  }
   const old = f.pax[uid];
   if (b.active === false) {
     if (old) { delete f.pax[uid]; replan(f); save(); broadcast(id); }
@@ -206,33 +210,15 @@ router.post('/flights/:id/pax', auth, (req, res) => {
   if (old && JSON.stringify(old) === JSON.stringify(next)) return res.json({ ok: true, state: view(id, f) });
   f.pax[uid] = next;
   if (want && f.sales[want]) delete f.sales[want];
-  replan(f); save(); broadcast(id);
-  res.json({ ok: true, state: view(id, f) });
-});
-
-/* Operations / planner: sell a seat to a (simulated) paying passenger. */
-router.post('/flights/:id/seats/:seat', auth, (req, res) => {
-  const { id, seat } = req.params, f = ID_RE.test(id) && db.flights[id];
-  if (!f || !SEAT_RE.test(seat)) return res.status(400).json({ ok: false, error: 'Bad seat.' });
-  const why = seatFree(f, seat, '');
-  if (why) return res.status(409).json({ ok: false, error: why, state: view(id, f) });
-  const wasStudent = Object.values(f.plan).includes(seat);
-  f.sales[seat] = 'ops';
+  const tookPlanned = !student && want && want !== had && Object.values(f.plan).includes(want);
   const { moved } = replan(f);
-  const n = moved.length;
-  f.log.unshift(`${seat} sold to a paying passenger${wasStudent ? ' (planned for a student)' : ''}. ${n ? `Re-seated ${n} student${n > 1 ? 's' : ''}: ${moved.join(', ')}.` : 'No student had to move.'}`);
-  f.log = f.log.slice(0, 30);
+  if (tookPlanned || (moved.length && !student)) { // a real passenger took a seat planned for a student: say who moved (no names)
+    const n = moved.length;
+    f.log.unshift(`A passenger chose ${want}${tookPlanned ? ' (planned for a student)' : ''}. ${n ? `Re-seated ${n} student${n > 1 ? 's' : ''}: ${moved.join(', ')}.` : 'No student had to move.'}`);
+    f.log = f.log.slice(0, 30);
+  }
   save(); broadcast(id);
   res.json({ ok: true, state: view(id, f) });
 });
 
-/* Rehearsal: clear the planner's sales and log (bookings stay). */
-router.post('/flights/:id/reset', auth, (req, res) => {
-  const id = req.params.id, f = ID_RE.test(id) && db.flights[id];
-  if (!f) return res.status(404).json({ ok: false, error: 'Unknown flight.' });
-  f.sales = {}; f.log = []; f.plan = {};
-  replan(f); save(); broadcast(id);
-  res.json({ ok: true, state: view(id, f) });
-});
-
-module.exports = { router, flightId, _db: () => db, _schedule: schedule };
+module.exports = { router, flightId, pseudo, replan, broadcast, _db: () => db, _schedule: schedule };

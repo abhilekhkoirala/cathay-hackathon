@@ -14,6 +14,10 @@ npm start                # http://localhost:3000   (phone-frame view: /mobile.ht
 
 Without any SMTP settings the app runs in **demo mode**: the 6-digit code is shown on screen instead of being emailed. Everything else works the same.
 
+## Public interface first
+
+The app opens as a normal **Cathay** site: book flights, manage bookings, Asia Miles. Nothing about students is shown until you sign in. After signing in, members who aren't verified students get a one-time pop-up (*"Studying at university?"*) with **Verify my student email** and **Discover student benefits** (`#/discover`). Once verified, the student interface appears: student points, perks, student seating, student offers.
+
 ## Accounts
 
 There are **no built-in users or bookings**. Create an account (*Sign in → Create an account*: name, email, password, date of birth); a member number and a personal invite code are generated. New accounts start empty: no trips, 0 student points, 0 Asia Miles.
@@ -45,8 +49,8 @@ A cinematic, scroll-driven opening page for the pitch: one camera move from a je
 With `npm start` (or on a cloud machine, see below), every phone that opens the site shares **one set of flights and seats**:
 
 - **Real schedules:** searches return real Cathay Pacific flights from the **OAG Flight Info API**, fetched by the server. Set `OAG_KEY` in `.env`; the key never reaches the browser. Answers are cached per route and day to save quota. Without a key, or when OAG fails, the app shows the simulated schedule and labels it.
-- **Shared seats:** bookings, check-in seats and student seating are stored on the server (`data/live-db.json`). When one phone books, checks in or the planner sells a seat, every open phone updates within a second (Server-Sent Events), with no reload.
-- **Real students together:** verified students on different phones are seated by the same planner as the simulated students. Same university first, so verify both with the same university domain for the demo. If a paying passenger buys a seat planned for them, they move together.
+- **Shared seats, real data only:** bookings, check-in seats and student seating are stored on the server (`data/live-db.json`). There are no simulated passengers or students: every taken seat and every ★ is a real booking. When anyone books or checks in, every open phone updates within a second (Server-Sent Events).
+- **Real students together:** verified students on different phones are seated side by side, same university first (verify both with the same university domain for the demo). If another passenger chooses a seat planned for them, they move together, and the planner's change log says so (no names).
 - **Two people, one seat:** if two people pick the same seat at once, the second gets "That seat was just taken".
 
 **Demo:**
@@ -96,7 +100,7 @@ There is **no student section**. The planner seats students in small groups of 2
 1. Book an Economy flight for tomorrow (check-in opens 48 h before) and answer **Yes** to *Do you want to be seated next to students?*
 2. **Check in** → *Your seat*: the seat is already chosen, next to other students (e.g. *"40G, next to 2 students · one from CUHK · Same university as you"*).
 3. The boarding pass shows a **STUDENT** tag and how many students you're seated next to.
-4. **See how students are seated (demo)** opens the planner: tap any seat to sell it to a paying passenger and watch the affected students get re-seated (the change log lists every move).
+4. **See student seating on this flight** opens a live, read-only view of the cabin: students as ★, other passengers, free seats and a change log. It isn't offered on Economy Light (no seat choice there).
 
 Non-students check in with a normal seat map and can pick any free seat, including seats the planner had in mind for students.
 
@@ -107,7 +111,35 @@ Non-students check in with a normal seat map and can pick any free seat, includi
 3. Each group goes into the tightest run of free seats side by side that fits, so bigger gaps stay free for paying passengers.
 4. If a group doesn't fit: split it, pair leftover students together, sit them beside any seated student, or borrow one student from a group of 3. Only as a last resort does a student sit alone.
 
-Besides real users, each flight has anonymous **simulated** background passengers and students (generated per flight in `student-zone.js`) so cabins look realistic.
+Only real bookings are shown. (`SIMULATE` in `student-zone.js` can switch simulated background passengers back on for offline demos.)
+
+## Student flight chat (safety by design)
+
+A group chat per flight for verified students, run by our server (`chat-server.js`). Every rule below is enforced on the server, not only in the browser. It replaces the earlier AppSync chat, whose public API key let anyone with the site post in any room: **delete that stack if it was deployed** (`aws cloudformation delete-stack --stack-name aurelia-chat`).
+
+**Implemented in the prototype**
+
+- **Who:** signed-in account + student status recorded by the server when the university-email code was confirmed + aged 18+ on the departure date + an active booking on that flight + not removed for conduct.
+- **When:** opens 7 days before departure; messages deleted 48 h after arrival (scheduled arrival here; use the actual arrival from a flight-status feed in production).
+- **Group only:** one room per flight, no private or one-to-one messages. Joining is voluntary (guidelines must be accepted) and students can leave at any time.
+- **Data minimisation:** others see a first name, a verified tick and, only if the student opted in when booking, a university. Never a surname, email, booking, seat or seating preference.
+- **Private seat opt-out:** *"Don't seat me next to them"* on a message moves the other person at the next seating run. Nobody is told, and nobody can ask to sit next to someone.
+- **Reporting:** report any message with a reason (harassment, sexual, discrimination, bullying, threat, impersonation, doxxing, spam, solicitation, other). The reported person never learns who reported them.
+- **Moderation** (`#/moderation`, for accounts listed in `MODERATORS` in `.env`): moderators see the report with its context, set a severity (low / medium / high / critical) and dismiss it or confirm a violation. Confirmed messages are removed for everyone.
+- **Two-strike rule (team policy):** 1st confirmed violation = warning in the chat; 2nd = removed from the chat and the booking on that flight cancelled **with no refund**. Critical cases (threats, safety) are also removed from the chat at once and escalated to the airline's security team. A device can't undo a server-side cancellation.
+- **Evidence retention:** a report copies the message and its context to a separate, moderator-only store: up to 180 days, 30 days if dismissed, longer only under a legal hold. Everything else follows the 48 h deletion.
+- **Information pages:** *Safety & privacy* (`#/chat-safety`) for students and an FAQ for parents (`#/parents`). Parents never get access to adult students' conversations.
+
+**Proposed, not implemented (needs people and process):** a staffed moderation team with response times; appeals; an escalation path to airline security and the police; a PDPO-compliant privacy notice and data access/correction process; a retention schedule confirmed by legal; and cabin-crew guidance.
+
+**For review by qualified Hong Kong legal counsel and the airline's safeguarding team:**
+
+- **The two-strike rule:** cancellation without refund for chat conduct may be challenged as unfair under consumer law and the conditions of carriage.
+- **The 180 / 30-day evidence periods.**
+- **Cross-border data:** the server runs in Sydney (`ap-southeast-2`), not in Hong Kong.
+- **What university-email verification proves:** access to a mailbox, not identity or enrolment.
+- **Moderators reading reported content.**
+- **Retaliation protections.**
 
 ## Student perks
 
@@ -142,7 +174,7 @@ Miles from perks are added to the member card; the graduation status shows on th
 ## What works
 
 - **Overview (Home)** — student points + breakdown donut, next flight, flight companion (locks until 7 days before departure), student exclusives, quick links (incl. Student perks), recent activity
-- **My flights** — upcoming / past, details, online check-in with seat map (Economy), automatic student seating + seating planner, boarding pass (demo QR), cancel; plus **Book a flight** (return / one-way search, date strip, passenger form → saved in localStorage)
+- **My flights** — upcoming / past, details, online check-in with seat maps for every cabin, automatic student seating + live student seating view, student flight chat, boarding pass (demo QR), cancel; plus **Book a flight** (return / one-way search, date strip, passenger form → saved in localStorage)
 - **Points & rewards** — student points balance, breakdown, student perks (adapter, invites, rewards paid with points, graduation gift) and activity list
 - **Student offers** — destination offers from Hong Kong, student verification prompt
 - **Retrieve booking** — booking reference + family name (bookings made on this device)
@@ -156,12 +188,13 @@ Miles from perks are added to the member card; the graduation status shows on th
 index.html    app shell (sidebar on desktop, header + 4-icon tab bar below 860px)
 styles.css    design tokens + responsive styles
 data.js       airports, cabins, fares (Light / Essential / Flex), simulated flight generator
-student-zone.js  simulated students per flight, economy cabin layout, student seat planner, perks data
+student-zone.js  cabin layouts, student seat planner (incl. private exclusions), perks data
 app.js        router, views, booking / check-in / seat map / perks / verification UI
 config.js     apiBase for the verification backend
 server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health (local / any Node host)
 accounts.js   sign-up / sign-in / sessions / per-user data / referrals (/api/auth, /api/me)
 db.js         JSON-file database shared by accounts.js and live.js
+chat-server.js student flight chat: eligibility, reports, moderation, two-strike rule, retention (/api/chat, /api/mod)
 live.js       live demo API (/api/live): shared flights and seats, student planner on the server, Server-Sent Events
 oag.js        OAG Flight Info API client (server-side, key from .env)
 mobile.html   phone-frame wrapper around index.html (9:41 status bar)

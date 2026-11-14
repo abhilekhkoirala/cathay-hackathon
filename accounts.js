@@ -35,7 +35,7 @@ function newMemberId() {
   return id;
 }
 /* What the browser may see about its own account. */
-const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4) });
+const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: u.student || null, moderator: isModerator(u) });
 
 function startSession(res, u) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -43,13 +43,31 @@ function startSession(res, u) {
   save();
   res.json({ ok: true, token, user: publicUser(u), data: db.userData[u.id] || {} });
 }
-function auth(req, res, next) {
+/* The signed-in user for a request (Bearer token), or null. */
+function userFromReq(req) {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const s = /^[a-f0-9]{64}$/.test(token) && db.sessions[token];
-  if (!s || s.exp < Date.now() || !db.users[s.uid]) return res.status(401).json({ ok: false, error: 'Please sign in again.' });
-  req.user = db.users[s.uid]; req.token = token;
+  return s && s.exp > Date.now() && db.users[s.uid] ? { user: db.users[s.uid], token } : null;
+}
+function auth(req, res, next) {
+  const who = userFromReq(req);
+  if (!who) return res.status(401).json({ ok: false, error: 'Please sign in again.' });
+  req.user = who.user; req.token = who.token;
   next();
 }
+/* Student status as recorded by the SERVER when the university-email code was confirmed (the browser's copy is not trusted). */
+function recordStudent(uid, email) {
+  if (!db.users[uid]) return;
+  db.users[uid].student = { email, at: new Date().toISOString() };
+  save();
+}
+const ageOn = (dob, when) => {
+  const b = new Date(dob), d = new Date(when);
+  let a = d.getFullYear() - b.getFullYear();
+  if (d.getMonth() < b.getMonth() || (d.getMonth() === b.getMonth() && d.getDate() < b.getDate())) a--;
+  return a;
+};
+const isModerator = (u) => String(process.env.MODERATORS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
 
 const router = express.Router();
 const hits = new Map();
@@ -107,6 +125,12 @@ router.put('/me/data', express.json({ limit: '220kb' }), auth, (req, res) => {
   const clean = {};
   for (const k of ['trips', 'prefs', 'verified', 'perks', 'chatName']) if (k in data) clean[k] = data[k];
   if (JSON.stringify(clean).length > MAX_DATA) return res.status(413).json({ ok: false, error: 'Too much data.' });
+  // Cancellations made by the server (chat conduct) can't be undone by a device sending an older copy.
+  const prev = (db.userData[req.user.id] || {}).trips || [];
+  prev.filter((t) => t && t.cancelReason).forEach((old) => {
+    const t = Array.isArray(clean.trips) && clean.trips.find((x) => x && x.ref === old.ref);
+    if (t) { t.status = old.status; t.cancelReason = old.cancelReason; } else if (Array.isArray(clean.trips)) clean.trips.push(old);
+  });
   db.userData[req.user.id] = clean;
   save();
   res.json({ ok: true });
@@ -123,4 +147,4 @@ router.get('/me/referrals', auth, (req, res) => {
   res.json({ ok: true, referrals: list });
 });
 
-module.exports = { router, auth };
+module.exports = { router, auth, userFromReq, recordStudent, ageOn, isModerator };

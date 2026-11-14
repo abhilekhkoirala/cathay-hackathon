@@ -8,6 +8,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
+const accounts = require('./accounts');
 
 const PORT = Number(process.env.PORT || 3000);
 const BRAND = 'Cathay Student Verify';
@@ -160,13 +161,18 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
     return res.status(400).json({ ok: false, error: `That code is not correct. ${MAX_ATTEMPTS - entry.attempts} attempts left.` });
   }
   pending.delete(email);
+  // Signed in? Record the student status on the account, server-side (used for chat eligibility).
+  const who = accounts.userFromReq(req);
+  if (who) accounts.recordStudent(who.user.id, email);
   res.json({ ok: true, verified: true, email, verifiedAt: new Date().toISOString() });
 });
 
 /* Live demo: shared flights (OAG) and seats for every device. */
 app.use('/api/live', require('./live').router);
 /* Accounts: sign up, log in, and each user's trips / perks on the server. */
-app.use('/api', require('./accounts').router);
+app.use('/api', accounts.router);
+/* Student flight chat: eligibility, reporting, moderation and retention enforced server-side. */
+app.use('/api', require('./chat-server').router);
 
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
 const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/chat.js': 'chat.js', '/chat-config.js': 'chat-config.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };
