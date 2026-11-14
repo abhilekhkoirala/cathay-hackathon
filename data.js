@@ -123,6 +123,29 @@
     prefs: { seat: 'Window', meal: 'Standard', notifications: true },
   };
 
+  const SEED_USER2 = {
+    id: 'u_1001',
+    firstName: 'Hatim',
+    lastName: 'Mestour',
+    email: 'hatim@example.com',
+    password: 'demo1234',
+    memberId: 'CS 2026 4800',
+    tier: 'Student',
+    points: 12480,
+    asiaMiles: 2350, // Asia Miles earned before verifying as a student (cards, partners)
+    earnedThisMonth: 1240,
+    breakdown: { flights: 58, campus: 27, partners: 15 },
+    activity: [
+      { title: 'Student welcome bonus', date: '2026-11-14', note: 'Points credited', pts: 500 },
+      { title: 'Campus partner purchase', date: '2026-11-10', note: 'Points credited', pts: 120 },
+      { title: 'Flight booking · HKG to KTM', date: '2026-11-08', note: 'Points credited', pts: 620 },
+    ],
+    phone: '+852 5555 0123',
+    dob: '2005-03-12',
+    memberSince: '2026',
+    prefs: { seat: 'Window', meal: 'Standard', notifications: true },
+  };
+
   function mkSeg(number, from, to, depDate, aircraft, seat) {
     const km = distanceKm(from, to);
     const durMin = Math.round((km / 800) * 60 + 35) + 8;
@@ -174,7 +197,7 @@
   }
 
   window.AURELIA = {
-    AIRPORTS, CABINS, CABIN_MULT, SEED_USER, seedTrips, generateFlights, distanceKm, basePrice,
+    AIRPORTS, CABINS, CABIN_MULT, SEED_USER,SEED_USER2, seedTrips, generateFlights, distanceKm, basePrice,
     airport, hash, mulberry32, toISO, toDate, addDays, pad,
   };
 })();
