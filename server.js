@@ -67,7 +67,8 @@ setInterval(() => {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '2kb' }));
+const smallJson = express.json({ limit: '2kb' });
+app.use((req, res, next) => (req.path === '/api/me/data' ? next() : smallJson(req, res, next))); // account data has its own larger limit
 
 const allowed = (process.env.ALLOWED_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use((req, res, next) => {
@@ -75,8 +76,8 @@ app.use((req, res, next) => {
   if (origin && allowed.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -164,6 +165,8 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
 
 /* Live demo: shared flights (OAG) and seats for every device. */
 app.use('/api/live', require('./live').router);
+/* Accounts: sign up, log in, and each user's trips / perks on the server. */
+app.use('/api', require('./accounts').router);
 
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
 const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/chat.js': 'chat.js', '/chat-config.js': 'chat-config.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };

@@ -14,20 +14,23 @@ npm start                # http://localhost:3000   (phone-frame view: /mobile.ht
 
 Without any SMTP settings the app runs in **demo mode**: the 6-digit code is shown on screen instead of being emailed. Everything else works the same.
 
-## Demo account (already signed in)
+## Accounts
 
-| | |
-|---|---|
-| Name | Abhilekh Koirala (shown as "Abhilekh K.") |
-| Email | `abhilekh@example.com` |
-| Password | `demo1234` |
-| Member no. | CS 2026 4821 |
-| Points | 12,480 (illustrative; 1,240 earned this month) |
+There are **no built-in users or bookings**. Create an account (*Sign in → Create an account*: name, email, password, date of birth); a member number and a personal invite code are generated. New accounts start empty: no trips, 0 student points, 0 Asia Miles.
 
-Seeded bookings: `K7M2QX` (HKG ⇄ KTM, first flight 38 days from today) · `M7S2HK` (Moscow → HKG, Economy, departs tomorrow so check-in is open: student seating, seat map and perks demo) · `P8C4HN` (past). *Settings → Reset demo data* restores everything.
+- **With the server** (`npm start` or the Lightsail deployment): accounts, bookings, perks and student verification are stored on the server (`accounts.js`, passwords hashed with scrypt, 30-day sessions), so the same account works on any phone or laptop.
+- **Without a server** (static hosting): accounts are stored in that browser only, and the sign-in page says so.
 
-**Home states:** with an upcoming booking you get the full dashboard (points donut, next flight, flight companion with the 7-day chat lock). With no upcoming booking (cancel `M7S2HK` and `K7M2QX` in *My flights*) it switches to the *No Flight Booked* layout. Inside 7 days of departure the chat card shows as open.
-**To demo online check-in** (opens 48 h before departure), change `addDays(38, …)` to `addDays(1, …)` in `data.js` and reset the demo data.
+*Settings → Clear my bookings and perks* empties the current account (the account and student verification stay).
+
+## Fares and seat selection
+
+Economy is sold as **Light, Essential and Flex**, as on cathaypacific.com: on **Light, seat selection is a paid extra**; on Essential, Flex and every premium cabin it's included.
+
+- **Economy Light check-in:** the seat map is locked. Unlock seat choice for that flight with **1,000 student points** (verified students) or **2,500 Asia Miles**, or take a free assigned seat.
+- **Verified students who answer Yes** to student seating are seated automatically next to students on any Economy fare (they don't choose a seat).
+- **Premium Economy (2-4-2), Business (1-2-1) and First (1-1-1)** have their own seat maps with free choice. Seats are claimed on the server: if two people pick the same seat at once, the second is told it was just taken.
+- **New verified students** get a one-time **1,500 student points welcome bonus**, enough for one seat unlock.
 
 ## Landing page (`landing.html`)
 
@@ -47,7 +50,7 @@ With `npm start` (or on a cloud machine, see below), every phone that opens the 
 - **Two people, one seat:** if two people pick the same seat at once, the second gets "That seat was just taken".
 
 **Demo:**
-1. Sign in as Hatim on one phone and Abhilekh on the other, and verify both.
+1. Create an account on each phone and verify both as students (same university domain).
 2. Book the same flight for tomorrow with "Yes" to student seating.
 3. Check in on both: each is seated next to the other.
 4. Open *See how students are seated* on a laptop and sell the seat planned for one of them. Both phones re-seat live.
@@ -86,11 +89,13 @@ Verified students (18+) are automatically seated next to another student, so a s
 
 There is **no student section**. The planner seats students in small groups of 2–3 side by side, e.g. `9A 9B 9C`, then `13A 13B`, from the same university when possible, otherwise any students. **Every other seat stays on sale.** When a paying passenger buys a seat that was planned for a student, the planner re-runs and moves only the students whose group was broken; everyone else keeps their seat. A student's seat is fixed once they check in.
 
-**Demo flow** (after *Settings → Reset demo data* and verifying with e.g. `name@link.cuhk.edu.hk`):
+**Privacy:** names are never shown to other passengers, on any screen or in any API answer: other students appear as **★ Student**. A student's university is shown only if they ticked *"Show my university to students seated near me"* when booking (changeable on the trip page). Hover a ★ in the planner for a small panel: *"Student · CUHK"* or *"Student · university not shared"*.
 
-1. *My trips* → `M7S2HK` Moscow → Hong Kong → answer **Yes** to *Do you want to be seated next to students?*
-2. **Check in** → *Your seat*: the seat is already chosen, next to another student (e.g. *"40G, next to Mei · CUHK · Same university as you"*).
-3. The boarding pass shows a **STUDENT** tag and who you're seated next to.
+**Demo flow** (verify with e.g. `name@link.cuhk.edu.hk`):
+
+1. Book an Economy flight for tomorrow (check-in opens 48 h before) and answer **Yes** to *Do you want to be seated next to students?*
+2. **Check in** → *Your seat*: the seat is already chosen, next to other students (e.g. *"40G, next to 2 students · one from CUHK · Same university as you"*).
+3. The boarding pass shows a **STUDENT** tag and how many students you're seated next to.
 4. **See how students are seated (demo)** opens the planner: tap any seat to sell it to a paying passenger and watch the affected students get re-seated (the change log lists every move).
 
 Non-students check in with a normal seat map and can pick any free seat, including seats the planner had in mind for students.
@@ -102,7 +107,7 @@ Non-students check in with a normal seat map and can pick any free seat, includi
 3. Each group goes into the tightest run of free seats side by side that fits, so bigger gaps stay free for paying passengers.
 4. If a group doesn't fit: split it, pair leftover students together, sit them beside any seated student, or borrow one student from a group of 3. Only as a last resort does a student sit alone.
 
-All other students and paying passengers on a flight are **simulated** (generated per flight in `student-zone.js`).
+Besides real users, each flight has anonymous **simulated** background passengers and students (generated per flight in `student-zone.js`) so cabins look realistic.
 
 ## Student perks
 
@@ -111,7 +116,7 @@ Unlocked automatically by the verified student membership (*Points & rewards*, o
 | Perk | What the student gets | Why it costs Cathay almost nothing |
 |---|---|---|
 | **Free travel adapter** | A welcome gift for new students: a free adapter for the country of their university (worked out from the verified email: `cuhk.edu.hk` → Hong Kong, Type G; `.ac.uk` → UK; `.edu` → US…), on their first flight to that country, handed out on board by the crew. **Once per study programme.** Not offered when the home plugs are the same. Shown on the trip page and the boarding pass. | A few HK$, once per student, only for those who claim it (crew loads exactly what was claimed). |
-| **Invite friends** | Personal link (`#/r/JOHN-XXXX`). When a friend verifies with it and takes their first flight, both get 1,000 miles. Up to 10 friends a year. The link opens the verify page with an "A friend invited you" note. | Miles are only paid after the friend has flown (a new paying customer); capped per year. |
+| **Invite friends** | Personal link (`#/r/JOHN-XXXX`). It opens sign-up with an "Invited by a friend" note; when the friend verifies and takes their first flight, you get 1,000 miles (shown as *Friend J.*, initial only). Up to 10 friends a year. | Miles are only paid after the friend has flown (a new paying customer); capped per year. |
 | **Student points** | While studying, flights earn 1.5 student points for every Asia Mile a normal member would earn (*instead of* miles; credited at check-in). Asia Miles from cards, partners and invites keep coming as usual. Both balances show side by side on the member card. Points are **spent during studies** on Economy trips, from each trip page (*Pay with student points*) or the perks page: Wi-Fi messaging pass (1,000), full-flight Wi-Fi (5,000), preferred seat if still empty at check-in (1,000), lounge pass (6,000). At graduation **70% of what's left converts to Asia Miles**, the rest expires. | Cathay pays ≈ 0.89× normal miles, students get 1.05×; every reward is priced at or above its cost to Cathay (maths below). |
 | **Graduation gift** | One status tier up for **12 months** (e.g. Gold → Diamond) + 3,000 bonus miles + the student points conversion. Expected graduation date can be saved. | A few lounge visits and miles, to keep the graduate when they start flying for work. |
 
@@ -132,7 +137,7 @@ Unlocked automatically by the verified student membership (*Points & rewards*, o
 
 70% still breaks even if up to 95% of students convert (1 / (1.5 × 0.95) = 70.2%). The graduation gift (≈ 5,500 miles' worth, ~34% of a typical student's 16,000 miles over 4 years) is covered by the 11% saved on points plus ≈ US$20 of extra margin per student over 4 years (at ~US$0.006 per mile): one extra Cathay flight from one student in five. *(Assumptions to validate with Cathay's real data.)*
 
-Miles from perks are added to the member card; the graduation status shows on the member card and header. Demo buttons simulate a friend joining, their first flight, a term flight (student points) and graduating.
+Miles from perks are added to the member card; the graduation status shows on the member card and header. *Simulate graduation (demo)* shows the graduation gift, since nobody graduates during a pitch. Every balance change (check-in points, welcome bonus, seat unlocks, rewards, invites) is listed under *Recent activity*.
 
 ## What works
 
@@ -140,7 +145,7 @@ Miles from perks are added to the member card; the graduation status shows on th
 - **My flights** — upcoming / past, details, online check-in with seat map (Economy), automatic student seating + seating planner, boarding pass (demo QR), cancel; plus **Book a flight** (return / one-way search, date strip, passenger form → saved in localStorage)
 - **Points & rewards** — student points balance, breakdown, student perks (adapter, invites, rewards paid with points, graduation gift) and activity list
 - **Student offers** — destination offers from Hong Kong, student verification prompt
-- **Retrieve booking** — works signed out (`K7M2QX` + `Koirala`)
+- **Retrieve booking** — booking reference + family name (bookings made on this device)
 - **Travel tools** (from My flights) — flight status, timetable, baggage calculator (others are placeholders)
 - **Settings** — account card (student points, Asia Miles), preferences, student verification, sign out
 - *Travel community* and *Help centre* are placeholders
@@ -150,11 +155,13 @@ Miles from perks are added to the member card; the graduation status shows on th
 ```
 index.html    app shell (sidebar on desktop, header + 4-icon tab bar below 860px)
 styles.css    design tokens + responsive styles
-data.js       airports, flight generator, seeded Abhilekh + trips + points
+data.js       airports, cabins, fares (Light / Essential / Flex), simulated flight generator
 student-zone.js  simulated students per flight, economy cabin layout, student seat planner, perks data
 app.js        router, views, booking / check-in / seat map / perks / verification UI
 config.js     apiBase for the verification backend
 server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health (local / any Node host)
+accounts.js   sign-up / sign-in / sessions / per-user data / referrals (/api/auth, /api/me)
+db.js         JSON-file database shared by accounts.js and live.js
 live.js       live demo API (/api/live): shared flights and seats, student planner on the server, Server-Sent Events
 oag.js        OAG Flight Info API client (server-side, key from .env)
 mobile.html   phone-frame wrapper around index.html (9:41 status bar)

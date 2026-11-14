@@ -1,4 +1,4 @@
-/* Cathay Student — DEMO data. Illustrative flights, points and users. */
+/* Cathay Student — reference data: airports, cabins, fares and a simulated flight generator (used when OAG is unavailable). */
 (function () {
   const pad = (n) => String(n).padStart(2, '0');
   const toISO = (d) =>
@@ -49,6 +49,13 @@
   ];
   const CABINS = ['Economy', 'Premium Economy', 'Business', 'First'];
   const CABIN_MULT = { Economy: 1, 'Premium Economy': 1.7, Business: 3.2, First: 5 };
+  /* Economy fare types, as Cathay sells them. Light: seat selection is a paid extra (here: student points or
+   * Asia Miles). Essential and Flex: seat selection included. Premium cabins always include it. */
+  const FARES = {
+    Light: { mult: 0.9, seat: 'paid', note: 'Seat selection is a paid extra' },
+    Essential: { mult: 1, seat: 'free', note: 'Seat selection included' },
+    Flex: { mult: 1.25, seat: 'free', note: 'Seat selection included · free changes' },
+  };
   const AIRCRAFT = ['A350-900', 'A330-300', 'B777-300ER', 'A321neo', 'B787-9'];
 
   const airport = (c) => AIRPORTS.find((a) => a.code === c);
@@ -100,161 +107,8 @@
     return out.sort((a, b) => a.dep.localeCompare(b.dep));
   }
 
-  /* ---------- Seeded users (log in with email + password) ---------- */
-
-  // User 1: Abhilekh — newer member, Kathmandu-bound, window seat, standard meal.
-  const SEED_USER = {
-    id: 'u_1001',
-    firstName: 'Abhilekh',
-    lastName: 'Koirala',
-    email: 'abhilekh@example.com',
-    password: 'demo1234',
-    memberId: 'CS 2026 4821',
-    tier: 'Student',
-    points: 12480,
-    asiaMiles: 2350, // Asia Miles earned before verifying as a student (cards, partners)
-    earnedThisMonth: 1240,
-    breakdown: { flights: 58, campus: 27, partners: 15 },
-    activity: [
-      { title: 'Student welcome bonus', date: '2026-11-14', note: 'Points credited', pts: 500 },
-      { title: 'Campus partner purchase', date: '2026-11-10', note: 'Points credited', pts: 120 },
-      { title: 'Flight booking · HKG to KTM', date: '2026-11-08', note: 'Points credited', pts: 620 },
-    ],
-    phone: '+852 5555 0123',
-    dob: '2005-03-12',
-    memberSince: '2026',
-    prefs: { seat: 'Window', meal: 'Standard', notifications: true },
-  };
-
-  // User 2: Hatim — longer-standing member, long-haul to Paris, aisle seat, vegetarian meal, campus-heavy earner.
-  const SEED_USER2 = {
-    id: 'u_1002',
-    firstName: 'Hatim',
-    lastName: 'Mestour',
-    email: 'hatim@example.com',
-    password: 'demo1234',
-    memberId: 'CS 2025 3307',
-    tier: 'Student',
-    points: 15000,
-    asiaMiles: 4120,
-    earnedThisMonth: 860,
-    breakdown: { flights: 34, campus: 48, partners: 18 },
-    activity: [
-      { title: 'Campus partner purchase', date: '2026-11-12', note: 'Points credited', pts: 240 },
-      { title: 'Flight booking · HKG to CDG', date: '2026-11-05', note: 'Points credited', pts: 480 },
-      { title: 'Referral bonus', date: '2026-10-28', note: 'Points credited', pts: 140 },
-    ],
-    phone: '+852 6123 4567',
-    dob: '2004-09-27',
-    memberSince: '2025',
-    prefs: { seat: 'Aisle', meal: 'Vegetarian', notifications: false },
-  };
-
-  const SEED_USERS = [SEED_USER, SEED_USER2];
-
-  function mkSeg(number, from, to, depDate, aircraft, seat) {
-    const km = distanceKm(from, to);
-    const durMin = Math.round((km / 800) * 60 + 35) + 8;
-    const arr = new Date(depDate.getTime() + durMin * 60000);
-    return { number, from, to, dep: toISO(depDate), arr: toISO(arr), durMin, stops: 0, aircraft, seat };
-  }
-
-  /* To demo online check-in (opens 48 h before departure), change addDays(38, ...) below to addDays(1, ...). */
-  const TRIP_BUILDERS = {
-    u_1001: () => {
-      const me = [{ first: 'Abhilekh', last: 'Koirala' }];
-      return [
-        {
-          ref: 'K7M2QX',
-          status: 'Confirmed',
-          cabin: 'Economy',
-          pax: me,
-          total: 842,
-          checkedIn: false,
-          bought: toISO(addDays(-6, 14)),
-          segments: [
-            mkSeg('CX 751', 'HKG', 'KTM', addDays(38, 10, 35), 'A330-300', ''),
-            mkSeg('CX 752', 'KTM', 'HKG', addDays(66, 13, 20), 'A330-300', ''),
-          ],
-        },
-        {
-          ref: 'M7S2HK',
-          status: 'Confirmed',
-          cabin: 'Economy',
-          pax: me,
-          total: 698,
-          checkedIn: false,
-          bought: toISO(addDays(-12, 11)),
-          segments: [mkSeg('CX 044', 'SVO', 'HKG', addDays(1, 20, 15), 'A350-900', '')],
-        },
-        {
-          ref: 'P8C4HN',
-          status: 'Completed',
-          cabin: 'Economy',
-          pax: me,
-          total: 318,
-          checkedIn: true,
-          bought: toISO(addDays(-60, 9)),
-          segments: [
-            mkSeg('CX 711', 'HKG', 'SIN', addDays(-34, 8, 10), 'A330-300', '22A'),
-            mkSeg('CX 712', 'SIN', 'HKG', addDays(-30, 19, 45), 'A330-300', '22C'),
-          ],
-        },
-      ];
-    },
-    u_1002: () => {
-      const me = [{ first: 'Hatim', last: 'Mestour' }];
-      return [
-        {
-          ref: 'R3T9WD',
-          status: 'Confirmed',
-          cabin: 'Premium Economy',
-          pax: me,
-          total: 1465,
-          checkedIn: false,
-          bought: toISO(addDays(-9, 16)),
-          segments: [
-            mkSeg('CX 279', 'HKG', 'CDG', addDays(24, 23, 55), 'A350-900', ''),
-            mkSeg('CX 278', 'CDG', 'HKG', addDays(52, 12, 40), 'A350-900', ''),
-          ],
-        },
-        {
-          ref: 'D5L8NV',
-          status: 'Confirmed',
-          cabin: 'Economy',
-          pax: me,
-          total: 264,
-          checkedIn: false,
-          bought: toISO(addDays(-3, 10)),
-          segments: [mkSeg('CX 420', 'HKG', 'ICN', addDays(12, 9, 15), 'A321neo', '')],
-        },
-        {
-          ref: 'W2B6ZE',
-          status: 'Completed',
-          cabin: 'Economy',
-          pax: me,
-          total: 226,
-          checkedIn: true,
-          bought: toISO(addDays(-45, 13)),
-          segments: [
-            mkSeg('CX 460', 'HKG', 'TPE', addDays(-21, 7, 50), 'A330-300', '18C'),
-            mkSeg('CX 465', 'TPE', 'HKG', addDays(-18, 17, 30), 'A330-300', '19C'),
-          ],
-        },
-      ];
-    },
-  };
-
-  /* seedTrips(user?) — pass a seeded user (or its id) to get that user's trips.
-     With no argument it returns the first user's trips, as before. */
-  function seedTrips(user) {
-    const id = typeof user === 'string' ? user : user && user.id;
-    const build = TRIP_BUILDERS[id] || TRIP_BUILDERS[SEED_USER.id];
-    return build();
-  }
-
   window.AURELIA = {
-    AIRPORTS, CABINS, CABIN_MULT, SEED_USER, SEED_USER2, SEED_USERS, seedTrips, generateFlights, distanceKm, basePrice,
+    AIRPORTS, CABINS, CABIN_MULT, FARES, generateFlights, distanceKm, basePrice,
     airport, hash, mulberry32, toISO, toDate, addDays, pad,
   };
 })();

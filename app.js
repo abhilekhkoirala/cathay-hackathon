@@ -1,18 +1,16 @@
-/* Cathay Student — DEMO app. All data is illustrative and stored in localStorage. */
+/* Cathay Student — app. Accounts and bookings live on the server (accounts.js, live.js) with a localStorage cache. */
 (() => {
   'use strict';
   const D = window.AURELIA;
-  const { AIRPORTS, CABINS, SEED_USER, SEED_USERS, generateFlights, distanceKm, basePrice, airport, hash, mulberry32, toISO, toDate } = D;
-
-  /* ---------- demo users ---------- */
-  const USERS = (SEED_USERS && SEED_USERS.length) ? SEED_USERS : [SEED_USER];
-  let activeId = SEED_USER.id; /* which seeded user's data is loaded; set in loadState() */
+  const { AIRPORTS, CABINS, FARES, generateFlights, distanceKm, basePrice, airport, hash, mulberry32, toISO, toDate } = D;
+  let activeId = ''; /* signed-in account id ('' = nobody); set in loadState() */
 
   /* ---------- storage (localStorage with in-memory fallback) ---------- */
-  /* Per-user keys are namespaced by user id so each demo user has their own trips, prefs, verification and perks.
-   * The first user keeps the original un-prefixed keys, so browsers that already visited keep their data. */
-  const PER_USER = new Set(['trips', 'prefs', 'verified', 'perks', 'invitedBy', 'chatName']);
-  const skey = (k) => 'cathay.' + (PER_USER.has(k) && activeId !== SEED_USER.id ? activeId + '.' : '') + k;
+  /* Per-user keys are namespaced by account id. They are a local cache: for server accounts every change is
+   * also saved to the server (cloudSave), so the same account works on any device. */
+  const PER_USER = new Set(['trips', 'prefs', 'verified', 'perks', 'chatName']);
+  const SYNCED = ['trips', 'prefs', 'verified', 'perks', 'chatName'];
+  const skey = (k) => 'cathay.' + (PER_USER.has(k) ? (activeId || 'guest') + '.' : '') + k;
   const mem = {};
   const store = {
     get(k, d) {
@@ -21,9 +19,10 @@
         return v === null ? d : JSON.parse(v);
       } catch { return skey(k) in mem ? mem[skey(k)] : d; }
     },
-    set(k, v) {
+    set(k, v, quiet) {
       mem[skey(k)] = v;
       try { localStorage.setItem(skey(k), JSON.stringify(v)); } catch {}
+      if (!quiet && activeId && SYNCED.includes(k)) cloudSave();
     },
   };
 
@@ -106,18 +105,97 @@
   const SZ = window.AURELIA_SZ;
   const seatSel = { key: '', seat: '' };
 
+  const DEFAULT_PREFS = { seat: 'No preference', meal: 'Standard', notifications: true };
+  /* The signed-in account (cached in localStorage) + its data. New accounts start empty: no trips, 0 points. */
   function loadState() {
-    const base = USERS.find((x) => x.id === store.get('activeUser', SEED_USER.id)) || SEED_USER;
-    activeId = base.id;
-    trips = store.get('trips', null);
-    if (!trips) { trips = D.seedTrips(base); store.set('trips', trips); }
-    const loggedOut = store.get('loggedOut', false);
-    const saved = store.get('prefs', null);
-    const u = JSON.parse(JSON.stringify(base));
-    if (saved) u.prefs = { ...u.prefs, ...saved };
-    user = loggedOut ? null : u;
-    if (user) user.verified = store.get('verified', null);
-    window.__seedUser = u;
+    const acct = store.get('account', null);
+    activeId = acct ? acct.id : '';
+    trips = acct ? store.get('trips', null) || [] : [];
+    user = acct ? {
+      ...acct, points: 0, asiaMiles: 0,
+      prefs: { ...DEFAULT_PREFS, ...(store.get('prefs', null) || {}) },
+      verified: store.get('verified', null),
+    } : null;
+    if (user) user.tier = user.verified ? 'Student' : 'Member';
+  }
+
+  /* ---------- accounts: server (shared across devices) or, without a server, this browser only ---------- */
+  const session = () => store.get('session', '');
+  const isLocalAccount = () => session() === 'local';
+  async function authCall(method, path, body) {
+    try {
+      const res = await fetch(API + '/api' + path, {
+        method, headers: { 'Content-Type': 'application/json', ...(session() && !isLocalAccount() ? { Authorization: 'Bearer ' + session() } : {}) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const j = await res.json().catch(() => ({}));
+      return { status: res.status, ok: res.ok && j.ok !== false, ...j };
+    } catch { return { status: 0, ok: false, error: 'Could not reach the server.' }; }
+  }
+  /* Stores the account + its data locally and switches to it. */
+  function useAccount(token, acct, data) {
+    store.set('session', token);
+    store.set('account', acct);
+    activeId = acct.id; refsCache = null; fetchRefs.at = 0;
+    Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null });
+    if (data) for (const k of SYNCED) store.set(k, k in data ? data[k] : null, true);
+    loadState();
+  }
+  let cloudTimer = null;
+  function cloudSave() {
+    if (!activeId || !session() || isLocalAccount()) return;
+    clearTimeout(cloudTimer);
+    cloudTimer = setTimeout(() => {
+      const data = {};
+      for (const k of SYNCED) data[k] = store.get(k, null);
+      authCall('PUT', '/me/data', { data }).then((r) => { if (r.status === 401) signOutLocal('Please sign in again.'); });
+    }, 400);
+  }
+  /* Local accounts (no server): password stored as salted SHA-256 in this browser only. */
+  async function sha(text) {
+    if (!(window.crypto && crypto.subtle)) return hash(text).toString(16) + hash(text + '#').toString(16); // http:// pages have no SubtleCrypto
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  async function localSignup(b) {
+    const users = store.get('localUsers', {});
+    if (users[b.email]) return { ok: false, error: 'An account with this email already exists on this device.' };
+    const salt = Math.random().toString(36).slice(2), id = 'l_' + Math.random().toString(36).slice(2, 12);
+    const acct = { id, firstName: b.firstName, lastName: b.lastName, email: b.email, dob: b.dob, memberId: `CS ${new Date().getFullYear()} ${String(hash(id) % 10000).padStart(4, '0')}`, refCode: SZ.referralCode(b.firstName, b.email), invitedBy: '', memberSince: String(new Date().getFullYear()) };
+    users[b.email] = { acct, salt, hash: await sha(salt + b.password) };
+    store.set('localUsers', users);
+    return { ok: true, token: 'local', user: acct, data: {} };
+  }
+  async function localLogin(email, password) {
+    const u = store.get('localUsers', {})[email];
+    if (!u || u.hash !== await sha(u.salt + password)) return { ok: false, error: "Those details don't match an account on this device." };
+    return { ok: true, token: 'local', user: u.acct, data: null };
+  }
+  /* Sign-in and sign-up forms: the server when it's there, otherwise this browser only. */
+  async function accountSubmit(id, f) {
+    const signup = id === 'signupForm', err = $(signup ? '#signupErr' : '#signinErr'), btn = $(`#${id} button[type=submit]`);
+    err.hidden = true; btn.disabled = true;
+    const email = String(f.get('email') || '').trim().toLowerCase(), password = String(f.get('password') || '');
+    let r;
+    if (signup) {
+      const b = { firstName: String(f.get('firstName')).trim(), lastName: String(f.get('lastName')).trim(), email, password, dob: f.get('dob'), invite: f.get('invite') || '' };
+      r = LIVE.on ? await authCall('POST', '/auth/signup', b) : await localSignup(b);
+    } else {
+      r = LIVE.on ? await authCall('POST', '/auth/login', { email, password }) : await localLogin(email, password);
+    }
+    btn.disabled = false;
+    if (!r.ok) { err.textContent = r.error || 'Something went wrong. Try again.'; err.hidden = false; return; }
+    useAccount(r.token, r.user, r.data);
+    if (signup) store.set('invite', '');
+    toast(signup ? `Welcome, ${r.user.firstName}! Your member number is ${r.user.memberId}.` : `Signed in as ${r.user.firstName}`);
+    location.hash = '#/home'; render();
+  }
+  function signOutLocal(msg) {
+    if (session() && !isLocalAccount()) authCall('POST', '/auth/logout', {});
+    store.set('session', ''); store.set('account', null);
+    loadState(); refsCache = null;
+    if (msg) toast(msg);
+    location.hash = '#/home'; render();
   }
   const saveTrips = () => store.set('trips', trips);
   const findTrip = (ref) => trips.find((t) => t.ref === ref);
@@ -168,7 +246,7 @@
         <div><span class="muted sm">Terminal</span><b>${termFor(seed)}</b></div>
         <div><span class="muted sm">Gate</span><b>${gateFor(seed)}</b></div>
         <div><span class="muted sm">Seat</span><b>${t.checkedIn || s.seat ? esc(s.seat) : '—'}</b></div>
-        <div><span class="muted sm">Cabin</span><b>${esc(t.cabin)}</b></div>
+        <div><span class="muted sm">Fare</span><b>${esc(fareName(t.cabin, t.fare))}</b></div>
       </div>
     </div>`;
   }
@@ -179,7 +257,7 @@
     <a class="card trip-card" href="#/trip/${t.ref}">
       <div class="row between"><b>${tripLabel(t)}</b><span class="row gap-sm">${user && isUpcoming(t) && studentTrip(t) ? `<span class="sz-pill">${icon('cap')} Student</span>` : ''}${badge(t.status)}</span></div>
       <div class="muted sm">${fmtDate(s0.dep)} · ${fmtTime(s0.dep)}${t.segments.length > 1 ? ' · returns ' + fmtDate(t.segments[1].dep, { day: 'numeric', month: 'short' }) : ''}</div>
-      <div class="row between small-row"><span class="muted sm">Ref <b class="mono">${t.ref}</b> · ${esc(t.cabin)}</span>
+      <div class="row between small-row"><span class="muted sm">Ref <b class="mono">${t.ref}</b> · ${esc(fareName(t.cabin, t.fare))}</span>
       ${isUpcoming(t) ? `<span class="pill">${countdown(s0.dep)}</span>` : ''}</div>
     </a>`;
   }
@@ -187,9 +265,12 @@
   /* ---------- student seating ---------- */
   const studentOk = (iso) => Boolean(user && user.verified && SZ.isAdult(user.dob, iso));
   const studentEligible = (t) => t.cabin === 'Economy' && studentOk(t.segments[0].dep);
+  /* Fares: Economy Light / Essential / Flex; premium cabins have one fare with seat selection included. */
+  const withFare = (f, fare) => (fare && FARES[fare] ? { ...f, fare, price: Math.round(f.price * FARES[fare].mult) } : { ...f, fare: null });
+  const fareName = (cabin, fare) => (cabin === 'Economy' && fare ? 'Economy ' + fare : cabin);
+  const seatRule = (cabin, fare) => (cabin === 'Economy' && fare && FARES[fare] ? FARES[fare].seat : 'free');
   /* Only students who answered "yes" are seated next to students; "no" books like everyone else. */
   const studentTrip = (t) => studentEligible(t) && t.studentSeat === true;
-  const who = (x) => `<b>${esc(x.name)}</b> · ${esc(x.uni)}`;
   const verifiedLabel = () => `<div class="sz-verified">${tick()} Verified student</div>`;
   const SEAT_QUESTION = 'Do you want to be seated next to students?';
 
@@ -223,7 +304,8 @@
   const segOut = (s) => ({ number: s.number, from: s.from, to: s.to, dep: s.dep, arr: s.arr, aircraft: s.aircraft, durMin: s.durMin, stops: s.stops });
   async function liveCall(path, body) {
     try {
-      const res = await fetch(API + '/api/live' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const headers = session() && !isLocalAccount() ? { Authorization: 'Bearer ' + session() } : {};
+      const res = await fetch(API + '/api/live' + path, body === undefined ? { headers } : { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
       const j = await res.json().catch(() => ({}));
       if (j.state) liveApply(j.state);
       return { ok: res.ok, status: res.status, ...j };
@@ -248,19 +330,24 @@
     es.onmessage = (e) => { try { liveApply(JSON.parse(e.data)); } catch {} };
   }
   /* Tells the server about this user's bookings (idempotent; only changes are sent). */
+  /* What the server needs to know about my booking on one flight. */
+  const paxBody = (t, s, seat) => {
+    const stu = studentTrip(t);
+    return {
+      seg: segOut(s), cabin: t.cabin,
+      student: stu ? { uni: SZ.universityFromEmail(user.verified.email), share: Boolean(t.showUni) } : null,
+      seat: stu ? null : seat || null, locked: stu && seat ? seat : null,
+      active: t.status === 'Confirmed',
+    };
+  };
+  const liveAccount = () => LIVE.on && user && session() && !isLocalAccount();
   function liveSync() {
-    if (!LIVE.on || !user) return;
+    if (!liveAccount()) return;
     clearTimeout(LIVE.timer);
     LIVE.timer = setTimeout(() => {
       trips.forEach((t) => t.segments.forEach((s) => {
-        if (t.cabin !== 'Economy' || new Date(s.dep) < new Date()) return;
-        const stu = studentTrip(t), id = liveId(s);
-        const body = {
-          seg: segOut(s), userId: user.id, name: user.firstName,
-          student: stu ? { uni: SZ.universityFromEmail(user.verified.email) } : null,
-          seat: stu ? null : s.seat || null, locked: stu && t.checkedIn ? s.seat || null : null,
-          active: t.status === 'Confirmed',
-        };
+        if (new Date(s.dep) < new Date()) return;
+        const id = liveId(s), body = paxBody(t, s, studentTrip(t) && !t.checkedIn ? null : s.seat);
         const k = JSON.stringify(body);
         if (LIVE.sent[id] === k) return;
         LIVE.sent[id] = k;
@@ -291,33 +378,74 @@
 
   /* Re-runs the student seat planner for one flight with every seat sold so far, and remembers the
    * result so students only move when a seat planned for them is bought. */
+  /* Privacy: other passengers appear only as "Student", with a university only if they chose to share it. */
+  const uniTagOf = (u) => (u ? 'u' + hash(String(u).toLowerCase()).toString(36) : '');
+  const myPid = (flightId) => 'p' + hash(user.id + '|' + flightId).toString(36); // my pseudonym on a shared flight (same as the server's)
+  function decorate(p) {
+    p.students.forEach((x) => {
+      if (x.shownUni === undefined) x.shownUni = x.me ? x.uni : x.share ? x.uni : '';
+      x.tag = x.uniTag || uniTagOf(x.uni);
+    });
+    p.groups.forEach((g) => { g.sameUni = g.members.length > 1 && g.members.every((m) => m.tag === g.members[0].tag); });
+    return p;
+  }
+  const uniLabel = (x) => (x && x.shownUni ? x.shownUni : 'university not shared');
+  function nearText(nb) {
+    const shown = nb.filter((x) => x.shownUni);
+    return `${nb.length === 1 ? 'a student' : nb.length + ' students'}${shown.length ? ' · ' + shown.map((x) => 'one from ' + esc(x.shownUni)).join(', ') : ''}`;
+  }
+
+  /* Re-runs the student seat planner for one flight (Economy) with every seat sold so far, and remembers the
+   * result so students only move when a seat planned for them is bought. */
   function seatPlan(t, i) {
     const s = t.segments[i], key = SZ.flightKey(s);
     const st = LIVE.on && LIVE.state[liveId(s)];
-    if (st) { // shared state: other phones' passengers and the server's plan
-      const mine = studentTrip(t), myId = user ? user.id : '';
-      let real = st.pax.filter((x) => x.student).map((x) => ({ id: x.id, me: x.id === myId, name: x.name, uni: x.uni, year: '', field: '', locked: x.locked }));
-      if (mine && !real.some((x) => x.me)) real.push({ id: myId, me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null });
-      if (!mine) real = real.filter((x) => !x.me);
-      const sold = st.sales.concat(st.pax.filter((x) => !x.student && x.seat && x.id !== myId).map((x) => x.seat));
-      if (!mine && s.seat) sold.push(s.seat);
+    if (st) { // shared state: other phones' passengers (pseudonymous) and the server's plan
+      const mine = studentTrip(t), pid = user ? myPid(st.id) : '';
+      let real = st.pax.filter((x) => x.student).map((x) => ({ id: x.id, me: x.id === pid, name: 'Student', uni: x.uni || x.uniTag, uniTag: x.uniTag, share: x.share, shownUni: x.share ? x.uni : '', year: '', field: '', locked: x.locked }));
+      if (mine) {
+        const myUni = SZ.universityFromEmail(user.verified.email);
+        real = real.map((x) => (x.me ? { ...x, uni: myUni, shownUni: myUni } : x));
+        if (!real.some((x) => x.me)) real.push({ id: pid, me: true, name: user.firstName, uni: myUni, uniTag: uniTagOf(myUni), shownUni: myUni, year: '', field: '', locked: t.checkedIn ? s.seat : null });
+      } else real = real.filter((x) => !x.me);
+      const sold = st.sales.concat(st.pax.filter((x) => !x.student && x.seat && x.id !== pid && (x.cabin || 'Economy') === 'Economy').map((x) => x.seat));
+      if (!mine && s.seat && t.cabin === 'Economy') sold.push(s.seat);
       const p = SZ.plan(s, { real, sold, fixed: st.plan, prev: LIVE.seen[st.id] || st.plan });
-      if (p.seatOf[myId]) p.seatOf.me = p.seatOf[myId];
+      if (p.seatOf[pid]) p.seatOf.me = p.seatOf[pid];
       p.live = st;
-      return p;
+      return decorate(p);
     }
     if (LIVE.on) liveEnsure(s);
     const me = studentTrip(t)
       ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null }
       : null;
     const sold = [...(store.get('sales', {})[key] || [])];
-    if (!me && s.seat) sold.push(s.seat);
+    if (!me && s.seat && t.cabin === 'Economy') sold.push(s.seat);
     const plans = store.get('seatplans', {});
     const p = SZ.plan(s, { me, sold, prev: plans[key] });
     plans[key] = p.seatOf;
     store.set('seatplans', plans);
-    return p;
+    return decorate(p);
   }
+
+  /* Seat map state for my cabin: layout, taken seats (other passengers) and, in Economy, the student plan. */
+  function seatState(t, i) {
+    const s = t.segments[i];
+    if (t.cabin === 'Economy') {
+      const p = seatPlan(t, i), taken = new Set([...p.paid].filter((id) => id !== s.seat));
+      Object.entries(p.at).forEach(([id, x]) => { if (!x.me && x.locked) taken.add(id); }); // seats only planned for students stay on sale
+      return { c: p.cabin, p, taken };
+    }
+    const c = SZ.cabin(s, t.cabin), taken = new Set(SZ.paidSeats(s, t.cabin));
+    const st = LIVE.on && LIVE.state[liveId(s)];
+    if (st) st.pax.forEach((x) => { if (x.seat && x.cabin === t.cabin && x.id !== myPid(st.id)) taken.add(x.seat); });
+    else if (LIVE.on) liveEnsure(s);
+    taken.delete(s.seat);
+    return { c, p: null, taken };
+  }
+  /* Economy Light: seat choice is a paid extra unless unlocked for this flight (student points or Asia Miles). */
+  const seatUnlocked = (t, i) => (perks().seatBuys || []).some((b) => b.ref === t.ref && b.i === i);
+  const seatLocked = (t, i) => seatRule(t.cabin, t.segments[i].fare || t.fare) === 'paid' && !seatUnlocked(t, i);
 
   /* Shown in the booking form and on the trip page when the user isn't a verified adult student. */
   function studentGate(iso) {
@@ -333,7 +461,7 @@
     if (!studentEligible(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
     const seated = studentTrip(t) && t.checkedIn ? t.segments.map((s, i) => {
       const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
-      return nb.length ? `<p class="sm" style="margin:0">${esc(s.number)} · seat ${esc(s.seat)}, next to ${nb.map(who).join(' and ')}</p>` : '';
+      return nb.length ? `<p class="sm" style="margin:0">${esc(s.number)} · seat ${esc(s.seat)}, next to ${nearText(nb)}</p>` : '';
     }).join('') : '';
     return `
     <div class="card sz-card">
@@ -364,9 +492,11 @@
   /* Separate box under "Verified student" once the question is answered: green for yes, red for no. */
   function seatChoice(yes, ref) {
     const change = ref ? `data-action="seat-change" data-ref="${ref}"` : 'data-action="seat-change-form"';
+    const t = ref && findTrip(ref);
+    const share = !yes ? '' : `<label class="check sm share-row"><input type="checkbox" ${ref ? `class="share-uni" data-ref="${ref}"` : 'name="szShowUni"'} ${t && t.showUni ? 'checked' : ''}> Show my university to students seated near me <span class="muted">(never your name)</span></label>`;
     return `<div class="sz-choice ${yes ? 'yes' : 'no'}">
       <span>${yes ? 'Student seating selected · your seat will be assigned at check-in' : 'Standard seating selected'}</span>
-      <button type="button" class="link-btn" ${change}>Change</button></div>${ref ? '' : `<input type="hidden" name="szSeat" value="${yes ? 'yes' : 'no'}">`}`;
+      <button type="button" class="link-btn" ${change}>Change</button></div>${share}${ref ? '' : `<input type="hidden" name="szSeat" value="${yes ? 'yes' : 'no'}">`}`;
   }
 
   /* Yes / No question. With a ref it saves on the trip; without (booking form) it's a radio input. */
@@ -383,7 +513,7 @@
   /* spRate: student points per Asia Mile a normal member would earn. spConvert: share converted to
    * Asia Miles at graduation (rest expires). With ~85% of students converting, Cathay pays
    * 1.5 × 0.70 × 0.85 ≈ 0.89 of normal miles while students get 1.05× (break-even up to 95% converting). */
-  const PERKS = { referralMiles: 1000, referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7 };
+  const PERKS = { referralMiles: 1000, referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500 };
   const EARN_RATE = { Economy: 0.5, 'Premium Economy': 0.75, Business: 1.25, First: 1.5 };
   /* Asia Miles a normal member would earn on a flight (share of the distance in miles, by cabin). */
   const flightMiles = (seg, cabin) => Math.round((distanceKm(seg.from, seg.to) * 0.6214 * (EARN_RATE[cabin] || 0.5)) / 10) * 10;
@@ -396,8 +526,9 @@
     { id: 'seat', icon: 'seat', name: 'Preferred seat', pts: 1000, note: 'Front or extra-legroom seat, if still empty at check-in.' },
     { id: 'lounge', icon: 'lounge', name: 'Lounge pass', pts: 6000, note: 'One lounge visit before your flight.' },
   ]; // Economy trips only: premium cabins already include them.
-  const spSpent = (p) => (p.redeemed || []).reduce((n, r) => n + r.pts, 0);
-  const spLeft = (p) => (p.graduated ? 0 : (user.points || 0) + (p.sp || 0) - spSpent(p));
+  const spSpent = (p) => (p.redeemed || []).reduce((n, r) => n + r.pts, 0) + (p.seatBuys || []).filter((b) => b.with === 'sp').reduce((n, b) => n + b.amount, 0);
+  const milesSpent = (p) => (p.seatBuys || []).filter((b) => b.with === 'miles').reduce((n, b) => n + b.amount, 0);
+  const spLeft = (p) => (p.graduated ? 0 : (p.welcome || 0) + (p.sp || 0) - spSpent(p));
   /* Pay for a reward on a trip with student points; returns an error message or ''. */
   function redeem(t, rw) {
     const p = perks();
@@ -428,17 +559,50 @@
     until.setMonth(until.getMonth() + PERKS.boostMonths);
     return until > new Date() ? until : null;
   }
-  /* Miles earned through student perks. */
+  /* Friends who signed up with my invite link (from the server; first-name initial only). */
+  let refsCache = null;
+  function fetchRefs() {
+    if (!user || !session() || isLocalAccount() || Date.now() - (fetchRefs.at || 0) < 3000) return;
+    fetchRefs.at = Date.now();
+    authCall('GET', '/me/referrals').then((r) => {
+      if (!r.ok || JSON.stringify(r.referrals) === JSON.stringify(refsCache)) return;
+      refsCache = r.referrals; rerender();
+    });
+  }
+  /* Miles earned through student perks: friends who verified AND flew (capped), and the graduation gift. */
   function perkMiles(p = perks()) {
-    const refs = p.referrals || [];
+    const refs = (refsCache || []).filter((r) => r.verified);
+    const flown = Math.min(PERKS.referralCap, refs.filter((r) => r.flown).length);
     return {
-      credited: refs.filter((r) => r.flown).length * PERKS.referralMiles + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
-      pending: refs.filter((r) => !r.flown).length * PERKS.referralMiles,
+      credited: flown * PERKS.referralMiles + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
+      pending: Math.max(0, Math.min(PERKS.referralCap - flown, refs.filter((r) => !r.flown).length)) * PERKS.referralMiles,
     };
   }
-  const asiaMiles = () => (user.asiaMiles || 0) + perkMiles().credited;
+  const asiaMiles = () => (user.asiaMiles || 0) + perkMiles().credited - milesSpent(perks());
+  /* Everything that changed a balance, newest first (real events only). */
+  function activity() {
+    if (!user) return [];
+    const p = perks(), out = [], day = (iso) => String(iso || '').slice(0, 10);
+    trips.forEach((t) => { if (t.studentPoints) out.push({ title: `Flight · ${t.segments[0].from} to ${t.segments[t.segments.length - 1].to}`, date: day(t.checkedInAt || t.segments[0].dep), note: 'Student points at check-in', pts: t.studentPoints }); });
+    if (p.welcome) out.push({ title: 'Student welcome bonus', date: day(p.welcomeAt), note: 'Verified student', pts: p.welcome });
+    (p.redeemed || []).forEach((r) => out.push({ title: rewardName(r.id), date: day(r.at), note: 'Trip ' + r.ref, pts: -r.pts }));
+    (p.seatBuys || []).forEach((b) => out.push({ title: 'Seat choice', date: day(b.at), note: 'Trip ' + b.ref, pts: -b.amount, unit: b.with === 'miles' ? 'miles' : 'pts' }));
+    (refsCache || []).filter((r) => r.verified && r.flown).slice(0, PERKS.referralCap).forEach((r) => out.push({ title: `Friend ${r.name} joined and flew`, date: day(r.joined), note: 'Invite bonus', pts: PERKS.referralMiles, unit: 'miles' }));
+    if (p.graduated) out.push({ title: 'Graduation gift', date: day(p.graduated), note: 'Bonus + converted points', pts: PERKS.gradMiles + (p.gradConverted || 0), unit: 'miles' });
+    return out.sort((a, b) => b.date.localeCompare(a.date));
+  }
+  const earnedThisMonth = () => {
+    const m = toISO(new Date()).slice(0, 7);
+    return activity().filter((a) => a.pts > 0 && a.unit !== 'miles' && a.date.startsWith(m)).reduce((n, a) => n + a.pts, 0);
+  };
+  function breakdown() {
+    const f = trips.reduce((n, t) => n + (t.studentPoints || 0), 0), b = perks().welcome || 0, tot = f + b;
+    if (!tot) return { flights: 0, campus: 0, partners: 0 };
+    const fl = Math.round((f * 100) / tot);
+    return { flights: fl, campus: 100 - fl, partners: 0 };
+  }
   const currentTier = () => (user.verified && gradBoostUntil(perks()) ? SZ.tierUp(user.tier) : user.tier);
-  const refLink = () => `${location.origin}${location.pathname}#/r/${SZ.referralCode(user.firstName, user.verified.email)}`;
+  const refLink = () => `${location.origin}${location.pathname}#/r/${user.refCode}`;
   /* Re-render without jumping to the top of the page. */
   const rerender = () => { const y = window.scrollY; render(); window.scrollTo(0, y); };
 
@@ -480,22 +644,22 @@
   }
 
   function pointsCard() {
-    const bd = user.breakdown;
-    const items = [['Flights', 'flights', 'lime'], ['Campus', 'campus', 'leaf'], ['Partners', 'partners', 'amber']];
+    const bd = breakdown(), earned = earnedThisMonth();
+    const items = [['Flights', 'flights', 'lime'], ['Bonuses', 'campus', 'leaf'], ['Partners', 'partners', 'amber']];
     return `<section class="points">
       <div class="pts-main">
         <span class="lab">Your student points</span>
         <div class="pts-num">${pts(spLeft(perks()))}</div>
         <div class="pts-sub">points available</div>
-        <span class="earned">${icon('up')} ${pts(user.earnedThisMonth)} earned this month</span>
-        <p class="pts-note">Illustrative balance · ${pts(user.earnedThisMonth)} earned this month</p>
+        <span class="earned">${icon('up')} ${pts(earned)} earned this month</span>
+        <p class="pts-note">${pts(earned)} earned this month</p>
       </div>
       <div class="bd-wrap">
         <span class="lab d-only">Points breakdown</span>
         <div class="bd">${donut(bd, spLeft(perks()))}
           <ul class="legend d-only">${items.map(([n, k, c]) => `<li><i class="dot ${c}"></i>${n}<b>${bd[k]}%</b></li>`).join('')}</ul></div>
         <p class="m-legend m-only">${bd.flights}% flights · ${bd.campus}% campus<br>${bd.partners}% partners</p>
-        <p class="foot-note d-only">Illustrative balance · refreshed just now</p>
+        <p class="foot-note d-only">Refreshed just now</p>
       </div>
     </section>`;
   }
@@ -563,9 +727,10 @@
     <a class="qrow" href="#/rewards">${icon('gift')}<div><b>Student perks</b><span class="s">Free adapter, invites, graduation gift</span></div></a>
     <button class="qrow" type="button" data-action="soon" data-label="Campus community">${icon('ring')}<div><b>Campus community</b><span class="s">Connect with student travellers</span></div></button></section>`;
 
-  const activityRow = (a) => `<div class="card act"><span class="ibadge">${icon('sparkle')}</span>
-    <div><b>${esc(a.title)}</b><span class="s">${fmtDate(a.date + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' })} · ${esc(a.note)}</span></div>
-    <b class="pts">+${pts(a.pts)} pts</b></div>`;
+  const activityRow = (a) => (!a ? `<div class="card act"><span class="ibadge">${icon('sparkle')}</span><div><b>No activity yet</b><span class="s">Points appear after you verify as a student and check in to flights.</span></div></div>`
+    : `<div class="card act"><span class="ibadge">${icon('sparkle')}</span>
+    <div><b>${esc(a.title)}</b><span class="s">${a.date ? fmtDate(a.date + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' : ''}${esc(a.note)}</span></div>
+    <b class="pts${a.pts < 0 ? ' neg' : ''}">${a.pts < 0 ? '−' : '+'}${pts(Math.abs(a.pts))} ${a.unit === 'miles' ? 'miles' : 'pts'}</b></div>`);
 
   function signedOutHome() {
     return `<div class="home noflight">
@@ -598,12 +763,28 @@
         <div class="head-actions d-only"><a class="circle" href="#/home" aria-label="Overview">${icon('home')}</a><a class="pillbtn" href="#/profile" aria-label="Account settings">${ini} ${icon('ext')}</a></div>
       </header>
       <div class="g2">${pointsCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
+      ${quickBookCard()}
       <div class="sect d-only"><h2>Made for your next journey</h2><p class="sub">Student-only tools, ready when you are.</p></div>
       <div class="sect m-only"><h2>Your flight companion</h2>${next ? '<p class="sub">Your personal trip support</p>' : ''}</div>
       <div class="g2 mid">${companionCard(next)}<div class="rcol">${exclCard(next)}${quickLinks()}</div></div>
-      <div class="d-only"><div class="sect-head"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(user.activity[0])}</div>
+      <div class="d-only"><div class="sect-head"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(activity()[0])}</div>
     </div>`;
   };
+
+  /* Overview: book a flight without leaving the page first. */
+  function quickBookCard() {
+    return `<form id="quickBook" class="card quick-book">
+      <div class="qb-head">${icon('plane')}<div><h3>Book a flight</h3><p class="muted sm">Real Cathay schedules · student seating and points included</p></div></div>
+      <div class="qb-fields">
+        <label class="field"><span>From</span><select name="from">${airportOptions(search.from || 'HKG')}</select></label>
+        <label class="field"><span>To</span><select name="to" required>${airportOptions(search.to, 'Going to…')}</select></label>
+        <label class="field"><span>Departing</span><input type="date" name="depart" min="${todayStr()}" value="${search.depart}" required></label>
+        <label class="field"><span>Cabin</span><select name="cabin">${CABINS.map((c) => `<option ${c === search.cabin ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+        <button class="btn btn-primary" type="submit">Search flights</button>
+      </div>
+      <p id="qbErr" class="err" hidden></p>
+    </form>`;
+  }
 
   function memberCard() {
     return `<div class="member">
@@ -612,7 +793,7 @@
       <div class="mono">${esc(user.memberId)}</div>
       <div class="row between stats"><div><span class="lab">Student points</span><b>${pts(spLeft(perks()))}</b></div>
         <div><span class="lab">Asia Miles</span><b>${pts(asiaMiles())}</b></div>
-        <div><span class="lab">Earned this month</span><b>+${pts(user.earnedThisMonth)}</b></div></div>
+        <div><span class="lab">Earned this month</span><b>+${pts(earnedThisMonth())}</b></div></div>
     </div>`;
   }
 
@@ -623,7 +804,7 @@
       ${pointsCard()}
       ${perksBody()}
       <div class="sect-head"><h3>Recent activity</h3></div>
-      <div class="stack" style="margin-top:0">${user.activity.map(activityRow).join('')}</div>
+      <div class="stack" style="margin-top:0">${activity().length ? activity().map(activityRow).join('') : activityRow()}</div>
     </div>`;
 
   const OFFER_TONES = [['#0b4a35', '#2f8a62'], ['#164b36', '#3f9a72'], ['#27502f', '#8aa83a'], ['#3a4f1d', '#a9c24a'], ['#0f3d4a', '#3f8f9a'], ['#5a3a14', '#d98b3f']];
@@ -700,13 +881,14 @@
           </div>
           <div class="f-side">
             <div class="muted sm">${f.number} · ${f.aircraft}</div>
-            <div class="price">${money(f.price * s.pax)}</div>
-            ${f.seatsLeft <= 4 ? `<div class="warn sm">${f.seatsLeft} seats left</div>` : '<div class="muted sm">total</div>'}
-            <button class="btn btn-primary sm-btn" data-action="pick" data-idx="${i}">Select</button>
+            ${s.cabin === 'Economy'
+              ? `<div class="fares">${Object.entries(FARES).map(([name, fr]) => `<button class="fare" data-action="pick" data-idx="${i}" data-fare="${name}" title="${esc(fr.note)}"><span>Economy ${name}</span><b>${money(Math.round(f.price * fr.mult) * s.pax)}</b><small>${fr.seat === 'paid' ? 'Seat choice extra' : 'Seat choice included'}</small></button>`).join('')}</div>`
+              : `<div class="price">${money(f.price * s.pax)}</div><button class="btn btn-primary sm-btn" data-action="pick" data-idx="${i}">Select</button>`}
+            ${f.seatsLeft <= 4 ? `<div class="warn sm">${f.seatsLeft} seats left</div>` : ''}
           </div>
         </div>`).join('')}
       </div>
-      <p class="muted sm">Demo data: flights and fares are generated, not real. Times shown without time-zone conversion.</p>
+      <p class="muted sm">Fares are illustrative. Times are local at each airport.</p>
     </div>`;
   };
 
@@ -720,7 +902,8 @@
         <label class="field"><span>Passenger ${i + 1} · given name</span><input name="first${i}" required value="${i === 0 && user ? esc(user.firstName) : ''}"></label>
         <label class="field"><span>Family name</span><input name="last${i}" required value="${i === 0 && user ? esc(user.lastName) : ''}"></label>
       </div>`).join('');
-    const flightLine = (f) => `<div class="sum-row"><b>${f.number}</b><span>${city(f.from)} → ${city(f.to)}</span><span>${fmtDate(f.dep, { weekday: 'short', day: 'numeric', month: 'short' })} · ${fmtTime(f.dep)}</span></div>`;
+    const flightLine = (f) => `<div class="sum-row"><b>${f.number}</b><span>${city(f.from)} → ${city(f.to)}</span><span>${fmtDate(f.dep, { weekday: 'short', day: 'numeric', month: 'short' })} · ${fmtTime(f.dep)}</span></div>
+      <div class="sum-row sm"><span class="muted">${esc(fareName(s.cabin, f.fare))}</span><span class="${seatRule(s.cabin, f.fare) === 'paid' ? 'warn' : 'muted'}">${seatRule(s.cabin, f.fare) === 'paid' ? `Seat selection: extra (${PERKS.seatSp.toLocaleString()} student points or ${PERKS.seatMiles.toLocaleString()} Asia Miles)` : 'Seat selection included'}</span></div>`;
     return `
     <div class="narrow">
       ${backLink('#/results', 'Back to flights')}
@@ -800,7 +983,7 @@
           <div><span>Gate</span><b>${gateFor(seed)}</b></div><div><span>Terminal</span><b>${termFor(seed)}</b></div>
           <div><span>Seat</span><b>${esc(s.seat)}</b></div><div><span>Group</span><b>${t.cabin === 'Economy' ? '4' : '1'}</b></div>
         </div>
-        ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nb.map((x) => `${esc(x.name)} (${esc(x.uni)})`).join(' and ') : 'Student'}</div>` : ''}
+        ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nearText(nb) : 'Student seating'}</div>` : ''}
         ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(REWARDS.find((x) => x.id === r.id).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
         ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
@@ -819,28 +1002,31 @@
     for (let r = c.first; r <= c.last; r++) rows.push(`<div class="srow"><span class="rnum">${r}</span>${c.blocks.map((b) => b.map((L) => cell(r + L)).join('')).join(aisle)}</div>`);
     return `<div class="seatmap">${rows.join('')}</div>`;
   }
-  const seatEl = (id, cls, inner = '', action = '', label = '') => action
-    ? `<button class="seat ${cls}" data-action="${action}" data-seat="${id}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</button>`
-    : `<span class="seat ${cls}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</span>`;
+  /* tip: text for the floating hover panel (student seats); otherwise the native title tooltip. */
+  const seatEl = (id, cls, inner = '', action = '', label = '', tip = '') => {
+    const attrs = `data-seat="${id}" aria-label="Seat ${id}${esc(label)}" ${tip ? `data-tip="${esc(id + ' · ' + tip)}"` : `title="${id}${esc(label)}"`}`;
+    return action ? `<button class="seat ${cls}" data-action="${action}" ${attrs}>${inner}</button>` : `<span class="seat ${cls}" ${attrs} tabindex="${tip ? 0 : -1}">${inner}</span>`;
+  };
   const legend = (items) => `<div class="seat-legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
 
   views.seats = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx), s = t && t.segments[i];
     if (!t || !s) return notFound();
     if (t.checkedIn || !canCheckIn(t)) return redirect('#/trip/' + ref);
-    const p = seatPlan(t, i), c = p.cabin, me = p.students.find((x) => x.me);
-    seatCtx = { t, i, p };
+    const { c, p, taken } = seatState(t, i);
+    const me = p && p.students.find((x) => x.me);
+    seatCtx = { t, i, p, c, taken };
     const head = `${backLink('#/trip/' + ref, 'Back to trip')}
-      <p class="eyebrow">Check-in · flight ${i + 1} of ${t.segments.length}</p>
-      <h1>${me ? 'Your seat' : 'Choose your seat'}</h1>
-      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)} · ${esc(s.aircraft)}</p>`;
+      <p class="eyebrow">Check-in · flight ${i + 1} of ${t.segments.length} · ${esc(fareName(t.cabin, s.fare || t.fare))}</p>
+      <h1>${me || seatLocked(t, i) ? 'Your seat' : 'Choose your seat'}</h1>
+      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)} · ${esc(s.aircraft)} · ${esc(t.cabin)}</p>`;
 
     if (me && p.seatOf.me) {
-      // Students don't choose: the planner has already put them next to other students.
+      // Students don't choose: the planner has already put them next to other students (any Economy fare).
       const mine = p.seatOf.me, nb = p.neighboursOf(me), near = new Set(nb.map((x) => p.seatOf[x.id]));
       seatSel.seat = mine;
       const cell = (id) => id === mine ? seatEl(id, 'mine', id.slice(-1), '', ', your seat')
-        : near.has(id) ? seatEl(id, 'stu', icon('cap'), '', ', ' + p.at[id].name)
+        : near.has(id) ? seatEl(id, 'stu', '★', '', ', Student · ' + uniLabel(p.at[id]))
         : p.paid.has(id) || p.at[id] ? seatEl(id, 'taken') : seatEl(id, 'free');
       return `
       <div class="narrow wide">${head}
@@ -851,10 +1037,10 @@
               <p class="eyebrow">We've seated you in</p>
               <div class="seat-big">${mine}</div>
               ${nb.length
-                ? `<p class="sm" style="margin:0">Next to ${nb.map((x) => `${who(x)}${x.year ? ` · ${esc(x.year)}, ${esc(x.field)}` : ' · on Cathay Student'}`).join('<br>and ')}</p>
-                   ${nb.some((x) => x.uni === me.uni) ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}`
+                ? `<p class="sm" style="margin:0">Next to ${nearText(nb)}</p>
+                   ${nb.some((x) => x.shownUni && x.tag === me.tag) ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}`
                 : `<p class="sm" style="margin:0">No other student could be seated next to you yet. We keep trying until check-in closes.</p>`}
-              <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Student seats are assigned automatically.</p>
+              <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Names are never shown; universities only when a student chooses to share theirs.</p>
             </div>
             <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">Check in · seat ${mine}</button></div>
           </div>
@@ -863,19 +1049,38 @@
     }
 
     if (seatSel.key !== ref + i) { seatSel.key = ref + i; seatSel.seat = s.seat || ''; }
-    const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1), 'pick-seat')
-      : p.paid.has(id) || (p.at[id] && p.at[id].locked) ? seatEl(id, 'taken') : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
+    const locked = seatLocked(t, i);
+    const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1), locked ? '' : 'pick-seat')
+      : taken.has(id) ? seatEl(id, 'taken')
+      : locked ? seatEl(id, 'free locked')
+      : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
+    const pp = perks(), sp = user.verified ? spLeft(pp) : 0, miles = asiaMiles();
+    const bought = (pp.seatBuys || []).find((x) => x.ref === t.ref && x.i === i);
+    const side = locked
+      ? `<div class="card seat-lock">
+          <p class="eyebrow">${icon('seat')} Economy Light</p>
+          <h3>Seat selection isn't included</h3>
+          <p class="muted sm">We'll assign you a seat for free, or you can unlock seat choice for this flight.</p>
+          <button class="btn btn-primary block sm-btn" data-action="seat-unlock" data-with="sp" ${!user.verified || sp < PERKS.seatSp ? 'disabled' : ''}>Choose my seat · ${PERKS.seatSp.toLocaleString()} student points</button>
+          <p class="muted sm unlock-note">${!user.verified ? 'Verify your student status to pay with student points.' : `You have ${sp.toLocaleString()} student points.`}</p>
+          <button class="btn btn-ghost block sm-btn" data-action="seat-unlock" data-with="miles" ${miles < PERKS.seatMiles ? 'disabled' : ''}>Choose my seat · ${PERKS.seatMiles.toLocaleString()} Asia Miles</button>
+          <p class="muted sm unlock-note">You have ${miles.toLocaleString()} Asia Miles.</p>
+          ${t.cabin === 'Economy' && studentEligible(t) && t.studentSeat !== true ? `<p class="muted sm unlock-note">Verified student? Answer <b>Yes</b> to student seating on the trip page and we'll seat you next to students for free.</p>` : ''}
+        </div>
+        <div class="seat-bar">
+          <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Check in · seat ' + seatSel.seat : 'Assign a seat first'}</button>
+          <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat (free)</button>
+        </div>`
+      : `<div class="card sm">${bought ? `${icon('check')} Seat choice unlocked with ${bought.with === 'sp' ? 'student points' : 'Asia Miles'}. ` : `Seat selection is included with ${esc(fareName(t.cabin, s.fare || t.fare))}. `}Pick any free seat.</div>
+        <div class="seat-bar">
+          <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Confirm seat ' + seatSel.seat : 'Pick a seat'}</button>
+          <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat</button>
+        </div>`;
     return `
     <div class="narrow wide">${head}
       <div class="seat-layout">
-        <div>${legend([['lg-free', 'Free'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']])}${seatGrid(c, cell)}</div>
-        <div class="seat-side">
-          <div class="card sm">Pick any free seat.</div>
-          <div class="seat-bar">
-            <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Confirm seat ' + seatSel.seat : 'Pick a seat'}</button>
-            <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat</button>
-          </div>
-        </div>
+        <div>${legend(locked ? [['lg-free locked', 'Free (choice locked)'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']] : [['lg-free', 'Free'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']])}${seatGrid(c, cell)}</div>
+        <div class="seat-side">${side}</div>
       </div>
     </div>`;
   };
@@ -895,7 +1100,7 @@
       const x = p.at[id], moved = planner.moved.has(id) ? ' moved' : '';
       if (x) {
         const g = groupOf[id], kind = x.me ? 'mine' : g.members.length < 2 ? 'solo' : g.sameUni ? 'stu' : 'mix';
-        return seatEl(id, kind + moved, x.me ? 'You' : esc(x.name.slice(0, 2)), x.locked ? '' : 'plan-sell', `, ${x.me ? 'you' : x.name} · ${x.uni}`);
+        return seatEl(id, kind + moved, x.me ? 'You' : '★', x.locked ? '' : 'plan-sell', x.me ? ', you' : ', Student · ' + uniLabel(x), x.me ? '' : 'Student · ' + uniLabel(x) + (x.locked ? ' · checked in' : ''));
       }
       return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', paying passenger') : seatEl(id, 'free', '', 'plan-sell', ', free');
     };
@@ -921,7 +1126,7 @@
             ${planner.log.length ? planner.log.map((l) => `<p class="sm plan-log">${l}</p>`).join('') : '<p class="muted sm">No seats sold yet.</p>'}
             <button class="btn btn-ghost block sm-btn" data-action="plan-reset">Reset this flight</button></div>
           <div class="card"><h3>Student groups</h3>
-            ${p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => esc(m.me ? 'You' : m.name)).join(', ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc(g.members[0].uni) : 'mixed'}</b></div>`).join('')}</div>
+            ${p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => (m.me ? 'You' : '★')).join(' ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc((g.members.find((m) => m.shownUni) || {}).shownUni || 'same university') : 'mixed'}</b></div>`).join('')}</div>
         </div>
       </div>
     </div>`;
@@ -952,7 +1157,6 @@
         <h3>Personal details</h3>
         <div class="sum-row"><span>Name</span><b>${esc(user.firstName)} ${esc(user.lastName)}</b></div>
         <div class="sum-row"><span>Email</span><b>${esc(user.email)}</b></div>
-        <div class="sum-row"><span>Phone</span><b>${esc(user.phone)}</b></div>
         <div class="sum-row"><span>Date of birth</span><b>${esc(user.dob)}</b></div>
         <div class="sum-row"><span>Member since</span><b>${esc(user.memberSince)}</b></div>
         <div class="sum-row"><span>Student status</span><b>${user.verified ? tick() + ' Verified' : 'Not verified'}</b></div>
@@ -977,7 +1181,7 @@
       </form>
       <div class="stack">
         <button class="btn btn-ghost block" data-action="signout">${icon('logout')} Sign out</button>
-        <button class="btn btn-ghost block sm-btn" data-action="reset-demo">Reset demo data</button>
+        <button class="btn btn-ghost block sm-btn" data-action="reset-demo">Clear my bookings and perks</button>
       </div>
     </div>`;
   };
@@ -1008,7 +1212,7 @@
     }
     return `<div class="narrow">${back}
       <h1>Verify student status</h1>
-      ${store.get('invitedBy', '') ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(store.get('invitedBy', ''))}). Verify and you'll both get ${PERKS.referralMiles.toLocaleString()} miles after your first flight.</span></div>` : ''}
+      ${user.invitedBy ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(user.invitedBy)}). Verify and you'll both get ${PERKS.referralMiles.toLocaleString()} miles after your first flight.</span></div>` : ''}
       <p class="muted">Enter your university email. We'll send a 6-digit code — any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
       <form id="verifyEmailForm" class="card form" novalidate>
         <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email)}" required autocomplete="email"></label>
@@ -1065,11 +1269,11 @@
       <form id="retrieveForm" class="card form">
         <h3>Find a booking</h3>
         <label class="field"><span>Family name</span><input name="last" required></label>
-        <label class="field"><span>Booking reference</span><input name="ref" required maxlength="6" class="mono" placeholder="${upcoming()[0] ? upcoming()[0].ref : 'K7M2QX'}"></label>
+        <label class="field"><span>Booking reference</span><input name="ref" required maxlength="6" class="mono" placeholder="e.g. ABC123"></label>
         <p id="retrieveErr" class="err" hidden></p>
         <button class="btn btn-primary block" type="submit">Continue</button>
       </form>
-      ${trips[0] ? `<p class="muted sm">Demo hint: try <b class="mono">${esc((upcoming()[0] || trips[0]).ref)}</b> with family name <b>${esc((upcoming()[0] || trips[0]).pax[0].last)}</b>.</p>` : ''}
+
     </div>`;
 
   views.signin = () => `
@@ -1078,27 +1282,55 @@
       <div class="narrow">
         <h1 class="mob-only">Sign in</h1>
         <form id="signinForm" class="card form">
-          <label class="field"><span>Email or member number</span><input name="email" value="abhilekh@example.com" required></label>
-          <label class="field"><span>Password</span><input type="password" name="password" value="demo1234" required></label>
+          <label class="field"><span>Email or member number</span><input name="email" autocomplete="username" required></label>
+          <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
           <p id="signinErr" class="err" hidden></p>
           <button class="btn btn-primary block" type="submit">Sign in</button>
-          ${USERS.map((u) => `<button class="btn btn-ghost block" type="button" data-action="demo-login" data-user="${u.id}">Continue as ${esc(u.firstName)} (demo)</button>`).join('')}
+          <a class="btn btn-ghost block" href="#/signup">Create an account</a>
         </form>
-        <p class="muted sm center">Demo credentials are pre-filled. ${USERS.length > 1 ? `Other demo accounts: ${USERS.slice(1).map((u) => `<b>${esc(u.email)}</b>`).join(', ')} (same password).` : ''} This is a concept prototype; no real accounts exist.</p>
+        ${!LIVE.on ? '<p class="muted sm center">Offline mode: accounts are stored in this browser only.</p>' : ''}
       </div></div>`;
+
+  views.signup = () => {
+    if (user) return redirect('#/home');
+    const invite = store.get('invite', '');
+    return `
+    <div class="signin">
+      <div class="signin-brand"><h1>Join Cathay Student</h1><p>One membership from your first flight: student seating, student points and perks.</p></div>
+      <div class="narrow">
+        <h1 class="mob-only">Create an account</h1>
+        <form id="signupForm" class="card form">
+          ${invite ? `<div class="sz-choice yes"><span>${icon('share')} Invited by a friend (${esc(invite)}). Verify as a student and fly: you both get ${PERKS.referralMiles.toLocaleString()} miles.</span></div>` : ''}
+          <div class="two">
+            <label class="field"><span>Given name</span><input name="firstName" autocomplete="given-name" maxlength="30" required></label>
+            <label class="field"><span>Family name</span><input name="lastName" autocomplete="family-name" maxlength="40" required></label>
+          </div>
+          <label class="field"><span>Email</span><input type="email" name="email" autocomplete="email" required></label>
+          <label class="field"><span>Password (8+ characters)</span><input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+          <label class="field"><span>Date of birth</span><input type="date" name="dob" max="${todayStr()}" required></label>
+          <input type="hidden" name="invite" value="${esc(invite)}">
+          <p id="signupErr" class="err" hidden></p>
+          <button class="btn btn-primary block" type="submit">Create account</button>
+          <a class="btn btn-ghost block" href="#/signin">I already have an account</a>
+        </form>
+        <p class="muted sm center">You can verify your student status after signing up.${!LIVE.on ? ' Offline mode: this account is stored in this browser only.' : ''}</p>
+      </div></div>`;
+  };
 
   /* Student perks section of the Points & rewards page. */
   function perksBody() {
     if (!user.verified) return studentGate(toISO(new Date()));
-    const p = perks(), m = perkMiles(p), refs = p.referrals || [];
+    const p = perks(), m = perkMiles(p), refs = refsCache || [];
+    fetchRefs();
     const country = studyCountry(), plug = SZ.countryPlug(country), at = adapterTrip(p), claimed = adapterClaimed(p);
     const adapterRow = (t, right) => `<div class="perk-row"><div><b>${esc(city(t.segments[0].from))} → ${esc(city(t.segments[0].to))}</b><div class="muted sm">${fmtDate(t.segments[0].dep, { day: 'numeric', month: 'short', year: 'numeric' })} · Type ${esc(plug)}</div></div>${right}</div>`;
     const adapter = !country ? '<p class="muted sm">We couldn\'t tell your university\'s country from your email.</p>'
       : claimed ? adapterRow(at, '<span class="badge ok">Claimed · collect on board</span>')
       : at ? adapterRow(at, `<button class="btn btn-primary sm-btn" data-action="claim-adapter" data-ref="${at.ref}">Claim free</button>`)
       : `<p class="muted sm">It will appear here when you book your first flight to ${esc(countryName(country))}.</p>`;
-    const friends = refs.map((r, i) => `<div class="perk-row"><div><b>${esc(r.name)}</b><div class="muted sm">${esc(r.uni)} · ${r.flown ? 'took their first flight' : 'verified · first flight pending'}</div></div>
-      ${r.flown ? `<span class="badge ok">+${PERKS.referralMiles.toLocaleString()} miles</span>` : `<button class="btn btn-ghost sm-btn" data-action="ref-flown" data-i="${i}">Simulate flight</button>`}</div>`).join('');
+    const friends = refs.map((r) => `<div class="perk-row"><div><b>Friend ${esc(r.name)}</b><div class="muted sm">Joined ${fmtDate(r.joined + 'T12:00', { day: 'numeric', month: 'short' })} · ${!r.verified ? 'not verified yet' : r.flown ? 'verified and flew' : 'verified · first flight pending'}</div></div>
+      ${r.verified && r.flown ? `<span class="badge ok">+${PERKS.referralMiles.toLocaleString()} miles</span>` : '<span class="badge">Pending</span>'}</div>`).join('')
+      || (isLocalAccount() ? '<p class="muted sm">Invites need an online account (this one is stored on this device only).</p>' : '<p class="muted sm">No friends have joined with your link yet.</p>');
     const boost = gradBoostUntil(p), nextTier = SZ.tierUp(user.tier);
     const gradMonth = p.gradMonth || (user.verified.until || '').slice(0, 7);
     return `
@@ -1121,7 +1353,6 @@
         <div class="perk-head">${icon('share')}<div><h3>Invite friends</h3><p class="muted sm">When a friend verifies as a student with your link and takes their first flight, you both get ${PERKS.referralMiles.toLocaleString()} miles. Up to ${PERKS.referralCap} friends a year.</p></div></div>
         <div class="ref-link"><span class="mono">${esc(refLink())}</span><button class="btn btn-primary sm-btn" data-action="ref-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>
         ${friends}
-        <button class="btn btn-ghost block sm-btn" data-action="ref-demo">Simulate a friend joining (demo)</button>
       </div>
 
       <div class="card perk">
@@ -1129,7 +1360,6 @@
         ${p.graduated
           ? `<div class="sp-row"><div><b>${(p.gradPoints || 0).toLocaleString()}</b><span>student points left</span></div>${icon('arrow')}<div><b>${(p.gradConverted || 0).toLocaleString()}</b><span>Asia Miles credited</span></div></div>`
           : `<div class="sp-row"><div><b>${spLeft(p).toLocaleString()}</b><span>student points</span></div>${icon('arrow')}<div><b>${spConverted(spLeft(p)).toLocaleString()}</b><span>Asia Miles at graduation</span></div></div>
-             <button class="btn btn-ghost block sm-btn" data-action="sp-demo">Simulate a term flight (demo)</button>
              <h3 class="rw-title">Spend your points</h3>
              <p class="muted sm" style="margin:0">Also available on each Economy trip page, under <b>Pay with student points</b>.</p>
              ${REWARDS.map((rw) => `<div class="perk-row reward">
@@ -1167,12 +1397,11 @@
 
   views.perks = () => redirect('#/rewards');
 
-  /* Invite link: remember who invited, then verify. */
+  /* Invite link: remember the code for sign-up. */
   views.r = (code) => {
-    store.set('invitedBy', String(code || '').toUpperCase());
-    if (user && user.verified) { toast('You are already a verified student.'); return redirect('#/rewards'); }
-    vs.returnTo = '#/rewards';
-    return redirect(user ? '#/verify' : '#/signin');
+    store.set('invite', String(code || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20));
+    if (user) { toast('Invite links are for new members.'); return redirect('#/home'); }
+    return redirect('#/signup');
   };
 
   /* ---------- flight chat (transports live in chat.js) ---------- */
@@ -1291,8 +1520,8 @@
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm']);
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -1349,20 +1578,17 @@
     pick(el) {
       const idx = Number(el.dataset.idx);
       if (search.step === 'out') {
-        search.out = flightsFor(search.from, search.to, search.depart, search.cabin)[idx];
+        search.out = withFare(flightsFor(search.from, search.to, search.depart, search.cabin)[idx], el.dataset.fare);
         if (search.type === 'return') { search.step = 'ret'; render(); } else location.hash = '#/confirm';
       } else {
-        search.back = flightsFor(search.to, search.from, search.ret, search.cabin)[idx];
+        search.back = withFare(flightsFor(search.to, search.from, search.ret, search.cabin)[idx], el.dataset.fare);
         location.hash = '#/confirm';
       }
     },
     'trips-tab'(el) { tripsTab = el.dataset.tab; render(); },
     checkin(el) {
       const t = findTrip(el.dataset.ref);
-      if (t.cabin === 'Economy') { seatSel.key = ''; location.hash = `#/seats/${t.ref}/0`; return; }
-      t.checkedIn = true;
-      t.segments.forEach((s, i) => { if (!s.seat) s.seat = (10 + (hash(t.ref + i) % 30)) + 'ABCDEF'[hash(t.ref + i + 's') % 6]; });
-      saveTrips(); toast('Checked in. Boarding pass ready.'); render();
+      seatSel.key = ''; location.hash = `#/seats/${t.ref}/0`; // every cabin gets a seat map now
     },
     'pick-seat'(el) {
       seatSel.seat = el.dataset.seat;
@@ -1375,19 +1601,14 @@
     async 'confirm-seat'() {
       const { t, i } = seatCtx;
       const s = t.segments[i];
-      if (LIVE.on && user) { // claim the seat on the shared server first: another phone may just have taken it
-        const stu = studentTrip(t);
-        const r = await liveCall('/flights/' + liveId(s) + '/pax', {
-          seg: segOut(s), userId: user.id, name: user.firstName,
-          student: stu ? { uni: SZ.universityFromEmail(user.verified.email) } : null,
-          seat: stu ? null : seatSel.seat, locked: stu ? seatSel.seat : null, active: true,
-        });
+      if (liveAccount()) { // claim the seat on the shared server first: another phone may just have taken it
+        const r = await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, seatSel.seat), active: true });
         if (r.status === 409) { toast(r.error || 'That seat was just taken.'); seatSel.seat = ''; seatSel.key = ''; return liveRerender(); }
       }
       s.seat = seatSel.seat;
       seatSel.key = '';
       if (i < t.segments.length - 1) { saveTrips(); location.hash = `#/seats/${t.ref}/${i + 1}`; return; }
-      t.checkedIn = true; saveTrips();
+      t.checkedIn = true; t.checkedInAt = toISO(new Date()); saveTrips();
       if (user && user.verified && !t.studentPoints) {
         const p = perks();
         t.studentPoints = Math.round(t.segments.reduce((n, s) => n + flightMiles(s, t.cabin), 0) * PERKS.spRate);
@@ -1397,9 +1618,20 @@
       location.hash = '#/trip/' + t.ref;
     },
     'auto-seat'() {
-      const { p } = seatCtx, ids = SZ.allSeats(p.cabin);
-      const seat = ids.find((id) => !p.paid.has(id) && !p.at[id]) || ids.find((id) => !p.paid.has(id));
-      if (seat) actions['pick-seat']({ dataset: { seat } });
+      const { p, c, taken } = seatCtx, ids = SZ.allSeats(c);
+      const seat = ids.find((id) => !taken.has(id) && !(p && p.at[id])) || ids.find((id) => !taken.has(id));
+      if (!seat) return toast('No free seat left in this cabin.');
+      actions['pick-seat']({ dataset: { seat } });
+      const b = $('#seatConfirm'); if (b) b.textContent = 'Check in · seat ' + seat;
+    },
+    'seat-unlock'(el) {
+      const { t, i } = seatCtx, p = perks(), w = el.dataset.with === 'miles' ? 'miles' : 'sp';
+      if (w === 'sp' && !user.verified) return toast('Verify your student status to pay with student points.');
+      if (w === 'sp' && spLeft(p) < PERKS.seatSp) return toast('Not enough student points.');
+      if (w === 'miles' && asiaMiles() < PERKS.seatMiles) return toast('Not enough Asia Miles.');
+      p.seatBuys = [...(p.seatBuys || []), { ref: t.ref, i, with: w, amount: w === 'sp' ? PERKS.seatSp : PERKS.seatMiles, at: toISO(new Date()) }];
+      savePerks(p); rerender();
+      flashTick(`Seat choice unlocked · −${(w === 'sp' ? PERKS.seatSp : PERKS.seatMiles).toLocaleString()} ${w === 'sp' ? 'student points' : 'Asia Miles'}`);
     },
     async 'plan-sell'(el) {
       const { t, i, p: before } = seatCtx, id = el.dataset.seat, key = SZ.flightKey(t.segments[i]);
@@ -1412,9 +1644,9 @@
       sales[key] = [...(sales[key] || []), id];
       store.set('sales', sales);
       const after = seatPlan(t, i), x = before.at[id];
-      const moves = after.moved.map((m) => `${esc(m.me ? 'You' : m.name)} ${before.seatOf[m.id]} → ${after.seatOf[m.id]}`);
+      const moves = after.moved.map((m) => `${m.me ? 'you ' : ''}${before.seatOf[m.id]} → ${after.seatOf[m.id]}`);
       planner.moved = new Set(after.moved.map((m) => after.seatOf[m.id]));
-      planner.log.unshift(`<b>${id}</b> sold to a paying passenger${x ? ` (planned for ${esc(x.me ? 'you' : x.name)})` : ''}. ${moves.length ? 'Re-seated: ' + moves.join(', ') + '.' : 'No student had to move.'}`);
+      planner.log.unshift(`<b>${id}</b> sold to a paying passenger${x ? ` (planned for ${x.me ? 'you' : 'a student'})` : ''}. ${moves.length ? `Re-seated ${moves.length} student${moves.length > 1 ? 's' : ''}: ` + moves.join(', ') + '.' : 'No student had to move.'}`);
       const y = window.scrollY; render(); window.scrollTo(0, y);
     },
     'plan-reset'() {
@@ -1430,9 +1662,12 @@
       if (!confirm('Cancel this booking? (demo)')) return;
       const t = findTrip(el.dataset.ref); t.status = 'Cancelled'; saveTrips(); toast('Booking cancelled.'); render();
     },
-    signout() { store.set('loggedOut', true); user = null; toast('Signed out.'); location.hash = '#/home'; render(); },
-    'demo-login'(el) { const u = USERS.find((x) => x.id === (el && el.dataset && el.dataset.user)) || SEED_USER; store.set('activeUser', u.id); store.set('loggedOut', false); loadState(); toast('Signed in as ' + u.firstName); location.hash = '#/home'; render(); },
-    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('sales', {}); store.set('seatplans', {}); store.set('perks', {}); store.set('invitedBy', ''); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
+    signout() { signOutLocal('Signed out.'); },
+    'reset-demo'() {
+      if (!confirm('Clear all your bookings and perks? Your account and student verification stay.')) return;
+      store.set('trips', []); store.set('perks', {}); store.set('sales', {}); store.set('seatplans', {});
+      loadState(); toast('Bookings and perks cleared.'); location.hash = '#/home'; render();
+    },
     unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
@@ -1446,24 +1681,6 @@
       const link = refLink();
       if (navigator.share) { navigator.share({ title: 'Fly with me on Cathay', text: 'Verify as a student with my link and we both get bonus miles.', url: link }).catch(() => {}); return; }
       (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Invite link copied'), () => toast(link));
-    },
-    'ref-demo'() {
-      const p = perks(), refs = p.referrals || [];
-      if (refs.length >= Math.min(PERKS.referralCap, SZ.FRIENDS.length)) return toast('Invite limit reached for this year.');
-      const [name, uni] = SZ.FRIENDS[refs.length];
-      p.referrals = [...refs, { name, uni, flown: false }];
-      savePerks(p); rerender(); toast(`${name} verified with your link`);
-    },
-    'ref-flown'(el) {
-      const p = perks(), r = p.referrals[Number(el.dataset.i)];
-      r.flown = true; savePerks(p); rerender();
-      toast(`+${PERKS.referralMiles.toLocaleString()} miles for you and ${r.name}`);
-    },
-    'sp-demo'() {
-      // A typical term flight: Moscow → Hong Kong in Economy.
-      const p = perks(), pts = Math.round(flightMiles({ from: 'SVO', to: 'HKG' }, 'Economy') * PERKS.spRate);
-      p.sp = (p.sp || 0) + pts; savePerks(p); rerender();
-      toast(`+${pts.toLocaleString()} student points`);
     },
     'grad-demo'() {
       const p = perks();
@@ -1501,7 +1718,12 @@
   document.addEventListener('submit', (e) => {
     e.preventDefault();
     const form = e.target, f = new FormData(form), id = form.id;
-    if (id === 'searchForm') {
+    if (id === 'quickBook') {
+      const to = f.get('to'), from = f.get('from'), err = $('#qbErr');
+      if (!to || to === from) { err.textContent = !to ? 'Choose a destination.' : 'Origin and destination must differ.'; err.hidden = false; return; }
+      Object.assign(search, { type: 'one way', from, to, depart: f.get('depart'), cabin: f.get('cabin'), pax: 1, step: 'out', out: null, back: null });
+      location.hash = '#/results';
+    } else if (id === 'searchForm') {
       readSearchForm(form);
       const err = $('#searchErr');
       let msg = '';
@@ -1514,23 +1736,21 @@
     } else if (id === 'confirmForm') {
       const s = search, ref = refCode();
       const fare = (s.out.price + (s.back ? s.back.price : 0)) * s.pax;
-      const mk = (fl, i) => ({ number: fl.number, from: fl.from, to: fl.to, dep: fl.dep, arr: fl.arr, durMin: fl.durMin, stops: fl.stops, aircraft: fl.aircraft, seat: '' });
+      const mk = (fl, i) => ({ number: fl.number, from: fl.from, to: fl.to, dep: fl.dep, arr: fl.arr, durMin: fl.durMin, stops: fl.stops, aircraft: fl.aircraft, fare: fl.fare || null, seat: '' });
       const t = {
         ref, status: 'Confirmed', cabin: s.cabin, checkedIn: false, bought: toISO(new Date()),
         pax: Array.from({ length: s.pax }, (_, i) => ({ first: f.get('first' + i).trim(), last: f.get('last' + i).trim() })),
         total: Math.round(fare * 1.14), segments: [mk(s.out), ...(s.back ? [mk(s.back)] : [])],
       };
       if (f.get('szSeat')) t.studentSeat = f.get('szSeat') === 'yes';
+      if (t.studentSeat) t.showUni = f.get('szShowUni') === 'on';
+      t.fare = s.out.fare || null;
       trips.push(t); saveTrips(); retrieved.add(ref);
       search.out = null; search.back = null; search.step = 'out'; search.to = '';
       toast(`Booked! Reference ${ref}`);
       location.hash = '#/trip/' + ref;
-    } else if (id === 'signinForm') {
-      const em = String(f.get('email')).trim().toLowerCase();
-      const match = USERS.find((u) => (em === u.email || em.replace(/\s/g, '') === u.memberId.replace(/\s/g, '').toLowerCase()) && f.get('password') === u.password);
-      const err = $('#signinErr');
-      if (!match) { err.textContent = 'Those details don\'t match a demo account.'; err.hidden = false; return; }
-      actions['demo-login']({ dataset: { user: match.id } });
+    } else if (id === 'signinForm' || id === 'signupForm') {
+      accountSubmit(id, f);
     } else if (id === 'retrieveForm') {
       const t = findTrip(String(f.get('ref')).trim().toUpperCase());
       const err = $('#retrieveErr');
@@ -1575,6 +1795,11 @@
   });
 
   document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('share-uni')) {
+      const t = findTrip(e.target.dataset.ref);
+      t.showUni = e.target.checked; saveTrips();
+      return flashTick(t.showUni ? 'University shown to nearby students' : 'University hidden');
+    }
     if (e.target.name !== 'szSeat' || e.target.type !== 'radio') return;
     const yes = e.target.value === 'yes';
     e.target.closest('.sz-choice-wrap').innerHTML = seatChoice(yes);
@@ -1661,8 +1886,10 @@
     vs.busy = false;
     if (ok) {
       const v = { email: vs.email, at: toISO(new Date()) };
-      store.set('verified', v); user.verified = v; vs.step = 'done'; vs.msg = '';
-      toast('Student status verified');
+      store.set('verified', v); user.verified = v; user.tier = 'Student'; vs.step = 'done'; vs.msg = '';
+      const p = perks();
+      if (!p.welcome) { p.welcome = PERKS.welcome; p.welcomeAt = toISO(new Date()); savePerks(p); }
+      toast(`Student status verified · +${PERKS.welcome.toLocaleString()} welcome points`);
       if (vs.returnTo) { const to = vs.returnTo; vs.returnTo = ''; location.hash = to; return; }
     } else vs.msg = msg;
     render();
@@ -1674,9 +1901,14 @@
     loadState();
     render();
     if (!location.hash) location.hash = '#/home';
-    fetch(API + '/api/live/health').then((r) => r.ok && r.json()).then((j) => {
+    fetch(API + '/api/live/health').then((r) => r.ok && r.json()).then(async (j) => {
       if (!j || !j.ok) return;
       LIVE.on = true; document.body.dataset.live = 'on';
+      if (session() && !isLocalAccount()) { // refresh this account's data from the server (another device may have changed it)
+        const r = await authCall('GET', '/me');
+        if (r.ok) useAccount(session(), r.user, r.data);
+        else if (r.status === 401) return signOutLocal('Your session expired. Please sign in again.');
+      }
       const y = window.scrollY; render(); window.scrollTo(0, y);
     }).catch(() => {});
   });

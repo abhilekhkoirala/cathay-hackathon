@@ -73,15 +73,28 @@
         uni: pick(r, goingHome ? UNIS[seg.from] || UNIS.HKG : UNIS[seg.to] || UNIS.HKG),
         year: pick(r, YEARS),
         field: pick(r, FIELDS),
+        share: r() < 0.6, // ~60% chose to show their university to students seated near them
       };
     });
   }
 
-  /* Economy cabin layout (3-3-3 on wide-bodies, 3-3 on the A321neo). */
-  function cabin(seg) {
-    return /A321/.test(seg.aircraft)
-      ? { blocks: [['A', 'B', 'C'], ['H', 'J', 'K']], first: 20, last: 37 }
-      : { blocks: [['A', 'B', 'C'], ['D', 'E', 'G'], ['H', 'J', 'K']], first: 30, last: 52 };
+  /* Cabin layouts. Row ranges never overlap, so a seat id (e.g. 41C) is unique on the whole aircraft.
+   * Wide-bodies: First 1-1-1, Business 1-2-1, Premium Economy 2-4-2, Economy 3-3-3. A321neo: Business 2-2, Economy 3-3. */
+  const LAYOUTS = {
+    wide: {
+      First: { blocks: [['A'], ['D'], ['K']], first: 1, last: 2 },
+      Business: { blocks: [['A'], ['D', 'G'], ['K']], first: 11, last: 24 },
+      'Premium Economy': { blocks: [['A', 'C'], ['D', 'E', 'F', 'G'], ['H', 'K']], first: 31, last: 34 },
+      Economy: { blocks: [['A', 'B', 'C'], ['D', 'E', 'G'], ['H', 'J', 'K']], first: 40, last: 62 },
+    },
+    narrow: {
+      Business: { blocks: [['A', 'C'], ['H', 'K']], first: 1, last: 3 },
+      Economy: { blocks: [['A', 'B', 'C'], ['H', 'J', 'K']], first: 20, last: 37 },
+    },
+  };
+  function cabin(seg, name = 'Economy') {
+    const set = /A32/.test(seg.aircraft) ? LAYOUTS.narrow : LAYOUTS.wide;
+    return { ...(set[name] || (name === 'Economy' ? set.Economy : set.Business)), name };
   }
   const allSeats = (c) => {
     const out = [];
@@ -112,10 +125,11 @@
     return out;
   }
 
-  /* Seats sold to paying passengers before any student was seated (deterministic, ~half the cabin). */
-  function paidSeats(seg) {
-    const r = mulberry32(hash('paid' + flightKey(seg)));
-    return new Set(allSeats(cabin(seg)).filter(() => r() < 0.5));
+  /* Seats already sold to (simulated) passengers: deterministic, about half of Economy, 40% elsewhere. */
+  function paidSeats(seg, name = 'Economy') {
+    const r = mulberry32(hash('paid' + flightKey(seg) + (name === 'Economy' ? '' : name)));
+    const share = name === 'Economy' ? 0.5 : 0.4;
+    return new Set(allSeats(cabin(seg, name)).filter(() => r() < share));
   }
 
   /* Split n students into groups of 3 and 2, never leaving one alone: 4 → 2+2, 5 → 3+2, 7 → 3+2+2. */
@@ -245,14 +259,13 @@
     for (let i = 0; i < 4; i++) { code += a[h % a.length]; h = Math.floor(h / a.length); }
     return String(firstName).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8) + '-' + code;
   }
-  const FRIENDS = [['Mei', 'CUHK'], ['Arjun', 'HKUST'], ['Sofia', 'HKU'], ['Kenji', 'PolyU'], ['Zara', 'CityU'], ['Lucas', 'HKBU']];
 
     const TIERS = ['Green', 'Silver', 'Gold', 'Diamond'];
   /* One tier up; a student member (no Cathay tier yet) goes to Silver. */
   const tierUp = (tier) => (TIERS.includes(tier) ? TIERS[Math.min(TIERS.length - 1, TIERS.indexOf(tier) + 1)] : 'Silver');
 
   window.AURELIA_SZ = {
-    universityFromEmail, isAdult, flightKey, studentsOn, cabin, allSeats, plan,
-    plugFor, countryPlug, studyCountry, referralCode, FRIENDS, tierUp,
+    universityFromEmail, isAdult, flightKey, studentsOn, cabin, allSeats, paidSeats, neighbours, plan,
+    plugFor, countryPlug, studyCountry, referralCode, tierUp,
   };
 })();

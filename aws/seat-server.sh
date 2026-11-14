@@ -17,7 +17,7 @@ PORT="${PORT:-80}"
 SSH=(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${SSH_KEY:+-i "$SSH_KEY"})
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
-FILES=(server.js live.js oag.js package.json package-lock.json index.html mobile.html styles.css app.js data.js
+FILES=(server.js live.js oag.js accounts.js db.js package.json package-lock.json index.html mobile.html styles.css app.js data.js
        student-zone.js chat.js config.js landing.html landing.css landing.js)
 [ -f chat-config.js ] && FILES+=(chat-config.js)
 OAG_KEY_LOCAL="$(grep -E '^OAG_KEY=' .env 2>/dev/null | cut -d= -f2- || true)"

@@ -6,13 +6,14 @@
  *   open phone gets the new state within a second over Server-Sent Events.
  * - Student seating runs the SAME planner as the app (student-zone.js, loaded below), so real students
  *   booked on different phones are seated together with the simulated ones.
- * Storage: a JSON file (data/live-db.json), written atomically. Fine for a demo; DynamoDB in production. */
+ * Storage: db.js (a JSON file, written atomically). Fine for a demo; DynamoDB in production. */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const express = require('express');
 const oag = require('./oag');
+const { auth } = require('./accounts'); // who is booking comes from the login, never from the request body
 
 /* ---------- reuse the browser code (data.js + student-zone.js) without copying it ---------- */
 const sandbox = { window: {} };
@@ -20,21 +21,8 @@ vm.createContext(sandbox);
 for (const f of ['data.js', 'student-zone.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, f), 'utf8'), sandbox, { filename: f });
 const D = sandbox.window.AURELIA, SZ = sandbox.window.AURELIA_SZ;
 
-/* ---------- storage ---------- */
-const DB_FILE = process.env.LIVE_DB || path.join(__dirname, 'data', 'live-db.json');
-let db = { flights: {}, searches: {} };
-try { db = { flights: {}, searches: {}, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) }; } catch { /* first run */ }
-let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
-      fs.writeFileSync(DB_FILE + '.tmp', JSON.stringify(db));
-      fs.renameSync(DB_FILE + '.tmp', DB_FILE);
-    } catch (e) { console.error('[live] save failed:', e.message); }
-  }, 200);
-}
+/* ---------- storage (db.js: one JSON file shared with accounts.js) ---------- */
+const { db, save } = require('./db');
 
 /* ---------- validation ---------- */
 const ID_RE = /^[A-Z0-9]{2,8}-\d{4}-\d{2}-\d{2}$/;
@@ -42,7 +30,6 @@ const IATA_RE = /^[A-Z]{3}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const SEAT_RE = /^\d{1,2}[A-K]$/;
-const USER_RE = /^[A-Za-z0-9_-]{2,40}$/;
 const str = (v, n) => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
 const flightId = (seg) => seg.number.replace(/\s+/g, '') + '-' + seg.dep.slice(0, 10);
 
@@ -60,27 +47,33 @@ function cleanSeg(s) {
 /* ---------- flight state + planner ---------- */
 function getFlight(id, seg) {
   let f = db.flights[id];
-  if (!f && seg) { f = db.flights[id] = { seg, sales: {}, pax: {}, order: 0, plan: {}, log: [], v: 0 }; replan(f); save(); }
+  if (!f && seg) { f = db.flights[id] = { id, seg, sales: {}, pax: {}, order: 0, plan: {}, log: [], v: 0 }; replan(f); save(); }
   return f || null;
 }
+/* Privacy: other devices never see a passenger's name or account id, only a per-flight pseudonym
+ * (the owner's phone computes its own the same way), and a student's university only if they chose to share it. */
+const pseudo = (uid, fid) => 'p' + D.hash(uid + '|' + fid).toString(36);
+const uniTag = (uni) => (uni ? 'u' + D.hash(String(uni).toLowerCase()).toString(36) : '');
+const CAB = (p) => p.cabin || 'Economy';
 const studentsOf = (f) => Object.entries(f.pax).filter(([, p]) => p.student).sort((a, b) => a[1].n - b[1].n)
-  .map(([id, p]) => ({ id, name: p.name, uni: p.uni, year: '', field: '', locked: p.locked || null }));
-const soldOf = (f) => Object.keys(f.sales).concat(Object.values(f.pax).filter((p) => !p.student && p.seat).map((p) => p.seat));
+  .map(([uid, p]) => ({ id: pseudo(uid, f.id), name: 'Student', uni: p.uni, share: !!p.share, year: '', field: '', locked: p.locked || null }));
+/* Seats taken in one cabin (the planner only uses Economy). */
+const soldOf = (f, cabin = 'Economy') => Object.keys(f.sales).filter((s) => SZ.allSeats(SZ.cabin(f.seg, cabin)).includes(s))
+  .concat(Object.values(f.pax).filter((p) => !p.student && p.seat && CAB(p) === cabin).map((p) => p.seat));
 
 /* Re-runs the student planner with everything sold so far; only students whose group broke move. */
 function replan(f) {
   const p = SZ.plan(f.seg, { real: studentsOf(f), sold: soldOf(f), prev: f.plan });
-  const moved = p.moved.map((m) => `${m.name} ${f.plan[m.id]} → ${p.seatOf[m.id]}`);
+  const moved = p.moved.map((m) => `${f.plan[m.id]} → ${p.seatOf[m.id]}`);
   f.plan = { ...p.seatOf };
   f.v++;
   return { p, moved };
 }
 
 /* Can `seat` be bought or chosen by `by`? Planned (not checked-in) student seats can: that's what makes students move. */
-function seatFree(f, seat, by) {
-  const c = SZ.cabin(f.seg);
-  if (!SZ.allSeats(c).includes(seat)) return 'No such seat on this aircraft.';
-  if (SZ.plan(f.seg, {}).paid.has(seat)) return 'That seat is already taken.';
+function seatFree(f, seat, by, cabin = 'Economy') {
+  if (!SZ.allSeats(SZ.cabin(f.seg, cabin)).includes(seat)) return 'No such seat in this cabin.';
+  if (SZ.paidSeats(f.seg, cabin).has(seat)) return 'That seat is already taken.';
   if (f.sales[seat]) return 'That seat was just taken.';
   for (const [id, p] of Object.entries(f.pax)) {
     if (id === by) continue;
@@ -91,7 +84,10 @@ function seatFree(f, seat, by) {
 
 const view = (id, f) => ({
   id, v: f.v, seg: f.seg, sales: Object.keys(f.sales), plan: f.plan, log: f.log.slice(0, 12),
-  pax: Object.entries(f.pax).sort((a, b) => a[1].n - b[1].n).map(([pid, p]) => ({ id: pid, name: p.name, student: !!p.student, uni: p.uni || '', seat: p.seat || null, locked: p.locked || null })),
+  pax: Object.entries(f.pax).sort((a, b) => a[1].n - b[1].n).map(([uid, p]) => ({
+    id: pseudo(uid, id), cabin: CAB(p), student: !!p.student, share: !!p.share,
+    uniTag: p.student ? uniTag(p.uni) : '', uni: p.student && p.share ? p.uni : '', seat: p.seat || null, locked: p.locked || null,
+  })),
 });
 
 /* ---------- live updates (Server-Sent Events) ---------- */
@@ -113,7 +109,7 @@ function price(f, cabin) {
 function estimateDur(f) { return f.durMin || Math.round((D.distanceKm(f.from, f.to) / 800) * 60 + 35) + 8; }
 function seatsLeft(f) {
   const st = db.flights[flightId(f)];
-  const c = SZ.cabin(f), taken = SZ.plan(f, {}).paid.size + (st ? soldOf(st).length : 0);
+  const c = SZ.cabin(f), taken = SZ.paidSeats(f).size + (st ? soldOf(st).length : 0);
   return Math.max(0, Math.min(9, SZ.allSeats(c).length - taken));
 }
 
@@ -182,27 +178,29 @@ router.get('/flights/:id/events', (req, res) => {
   req.on('close', () => listeners.get(id).delete(res));
 });
 
-/* A passenger's booking on this flight (idempotent: phones re-send it whenever their trip changes).
- * body: { seg, userId, name, student: { uni } | null, seat, locked, active } */
-router.post('/flights/:id/pax', (req, res) => {
+/* The signed-in user's booking on this flight (idempotent: phones re-send it whenever their trip changes).
+ * body: { seg, cabin, student: { uni, share } | null, seat, locked, active } */
+router.post('/flights/:id/pax', auth, (req, res) => {
   const id = req.params.id, b = req.body || {};
   const f = ID_RE.test(id) && getFlight(id, cleanSeg(b.seg));
   if (!f) return res.status(400).json({ ok: false, error: 'Bad flight.' });
-  const uid = str(b.userId, 40);
-  if (!USER_RE.test(uid)) return res.status(400).json({ ok: false, error: 'Bad user.' });
+  const uid = req.user.id, cabin = D.CABINS.includes(b.cabin) ? b.cabin : 'Economy';
   const old = f.pax[uid];
   if (b.active === false) {
     if (old) { delete f.pax[uid]; replan(f); save(); broadcast(id); }
     return res.json({ ok: true, state: view(id, f) });
   }
-  const student = b.student && typeof b.student === 'object';
+  const student = Boolean(b.student && typeof b.student === 'object') && cabin === 'Economy';
   const seat = SEAT_RE.test(b.seat) ? b.seat : null, locked = SEAT_RE.test(b.locked) ? b.locked : null;
-  const next = { n: old ? old.n : ++f.order, name: str(b.name, 30) || 'Passenger', student, uni: student ? str(b.student.uni, 60) : '', seat: student ? null : seat, locked: student ? locked : null };
+  const next = {
+    n: old ? old.n : ++f.order, cabin, student, uni: student ? str(b.student.uni, 60) : '', share: student && b.student.share === true,
+    seat: student ? null : seat, locked: student ? locked : null,
+  };
   const want = next.seat || next.locked;
   const had = old && (old.seat || old.locked);
   if (want && want !== had) {
-    const planned = student && f.plan[uid] === want;
-    const why = planned ? '' : seatFree(f, want, uid);
+    const planned = student && f.plan[pseudo(uid, id)] === want;
+    const why = planned ? '' : seatFree(f, want, uid, cabin);
     if (why) return res.status(409).json({ ok: false, error: why, state: view(id, f) });
   }
   if (old && JSON.stringify(old) === JSON.stringify(next)) return res.json({ ok: true, state: view(id, f) });
@@ -213,23 +211,23 @@ router.post('/flights/:id/pax', (req, res) => {
 });
 
 /* Operations / planner: sell a seat to a (simulated) paying passenger. */
-router.post('/flights/:id/seats/:seat', (req, res) => {
+router.post('/flights/:id/seats/:seat', auth, (req, res) => {
   const { id, seat } = req.params, f = ID_RE.test(id) && db.flights[id];
   if (!f || !SEAT_RE.test(seat)) return res.status(400).json({ ok: false, error: 'Bad seat.' });
   const why = seatFree(f, seat, '');
   if (why) return res.status(409).json({ ok: false, error: why, state: view(id, f) });
-  const was = Object.entries(f.plan).find(([, s]) => s === seat);
-  const name = was && (studentsOf(f).find((x) => x.id === was[0]) || SZ.studentsOn(f.seg).find((x) => x.id === was[0]) || {}).name;
+  const wasStudent = Object.values(f.plan).includes(seat);
   f.sales[seat] = 'ops';
   const { moved } = replan(f);
-  f.log.unshift(`${seat} sold to a paying passenger${name ? ` (planned for ${name})` : ''}. ${moved.length ? 'Re-seated: ' + moved.join(', ') + '.' : 'No student had to move.'}`);
+  const n = moved.length;
+  f.log.unshift(`${seat} sold to a paying passenger${wasStudent ? ' (planned for a student)' : ''}. ${n ? `Re-seated ${n} student${n > 1 ? 's' : ''}: ${moved.join(', ')}.` : 'No student had to move.'}`);
   f.log = f.log.slice(0, 30);
   save(); broadcast(id);
   res.json({ ok: true, state: view(id, f) });
 });
 
 /* Rehearsal: clear the planner's sales and log (bookings stay). */
-router.post('/flights/:id/reset', (req, res) => {
+router.post('/flights/:id/reset', auth, (req, res) => {
   const id = req.params.id, f = ID_RE.test(id) && db.flights[id];
   if (!f) return res.status(404).json({ ok: false, error: 'Unknown flight.' });
   f.sales = {}; f.log = []; f.plan = {};
