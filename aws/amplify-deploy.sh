@@ -17,6 +17,10 @@ BRANCH="${BRANCH:-main}"
 REGION="${AWS_REGION:-ap-southeast-2}"
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 
+# Windows' aws.exe ends output lines with CR+LF and Git Bash only strips the LF, which left a stray "\r" on the
+# upload URL (curl: (3) bad/illegal format). Strip the CRs from everything aws prints.
+aws() { command aws "$@" | tr -d '\r'; }
+
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -75,7 +79,8 @@ say "Uploading to Amplify"
 read -r JOB_ID UPLOAD_URL < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH" \
                                 --query '[jobId,zipUploadUrl]' --output text)
 [ -n "${JOB_ID:-}" ] && [ -n "${UPLOAD_URL:-}" ] || die "Amplify did not return an upload URL."
-curl -fsS -T "$ZIP" "$UPLOAD_URL" >/dev/null || die "Upload of the zip failed."
+curl -fsS -T "$ZIP" "$UPLOAD_URL" >/dev/null \
+  || die "Upload of the zip failed (upload target: ${UPLOAD_URL%%\?*})."
 aws amplify start-deployment --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$JOB_ID" >/dev/null
 
 say "Waiting for Amplify to publish (usually under a minute)"
