@@ -611,7 +611,7 @@ function purge() {
 setInterval(purge, 60 * 60 * 1000).unref();
 
 /* ---------- routes ---------- */
-const isReviewer = (u) => Boolean(u) && String(process.env.VERIFIERS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
+const isReviewer = (u) => Boolean(u) && [process.env.VERIFIERS, process.env.SEED_VERIFIER_EMAIL].join(',').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
 
 function createRouter({ auth }) {
   const router = express.Router();

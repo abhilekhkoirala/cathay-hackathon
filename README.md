@@ -106,6 +106,8 @@ Every upload is checked automatically; the results are shown to the reviewer, an
 
 ### Reviewer console (`#/review`)
 
+**Demo logins:** copy `.env.example` to `.env` and sign in as `verifier@cathay.demo` / `verify-demo-2026` (verification team) or `ops@cathay.demo` / `ops-demo-2026` (seating operations). These accounts are created when the server starts, from `SEED_*` values in `.env`. Change the passwords, and never use them on a server others can reach (the deploy script doesn't copy them).
+
 For accounts listed in `VERIFIERS` (`.env`). It shows the queue with the student's typed details, the automated checks, booked flight dates and a suggested validity date. Documents open from memory (never cached). The reviewer approves (validity date, max 12 months) or rejects with a reason and an optional note. Reviewers can't review their own submission, and a decision made on a document the student has since replaced is refused.
 
 ### Security and privacy

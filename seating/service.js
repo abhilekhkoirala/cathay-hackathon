@@ -486,7 +486,7 @@ async function view(uid, fid) {
 }
 
 /* ---------- operations (accounts in SEAT_OPS) ---------- */
-const isOps = (u) => Boolean(u) && String(process.env.SEAT_OPS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
+const isOps = (u) => Boolean(u) && [process.env.SEAT_OPS, process.env.SEED_OPS_EMAIL].join(',').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean).includes(u.email);
 const opsName = (uid) => { const u = db.users[uid] || {}; return `${u.firstName || '?'} ${u.lastName || ''}`.trim(); };
 async function opsView(actor, fid, req) {
   const f = await load(fid);
