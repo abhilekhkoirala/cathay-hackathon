@@ -87,6 +87,7 @@ router.post('/auth/signup', limit(20), (req, res) => {
   const b = req.body || {};
   const firstName = str(b.firstName, 30), lastName = str(b.lastName, 40), email = str(b.email, 254).toLowerCase();
   const password = String(b.password || ''), dob = str(b.dob, 10), invite = str(b.invite, 20).toUpperCase();
+  const parentInvite = str(b.parentInvite, 20).toUpperCase();
   if (!firstName || !lastName) return res.status(400).json({ ok: false, error: 'Enter your first and last name.' });
   if (!EMAIL_RE.test(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address.' });
   if (password.length < 8 || password.length > 200) return res.status(400).json({ ok: false, error: 'Use a password of at least 8 characters.' });
@@ -99,6 +100,10 @@ router.post('/auth/signup', limit(20), (req, res) => {
     memberId: newMemberId(), refCode: newRefCode(firstName), createdAt: new Date().toISOString(),
     invitedBy: invite && byCode(invite) ? invite : '',
   };
+  // Parent Pass: a verified student's parent link. At most PARENT_MAX parents per student; the link only works
+  // while the student is verified. The parent becomes a normal member (no student features, no passport scan).
+  const student = parentInvite && byCode(parentInvite);
+  if (student && studentVerify.clientVerified(student) && parentsOf(student.id).length < PARENT_MAX && student.id !== u.id) u.parentOf = student.id;
   db.users[u.id] = u;
   db.userData[u.id] = {};
   startSession(res, u);
@@ -140,6 +145,20 @@ router.put('/me/data', express.json({ limit: '220kb' }), auth, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------- Parent Pass ---------- */
+const PARENT_MAX = 2;
+const PARENT_GRACE_MONTHS = 6; // the graduation trip happens as student status ends: keep the pass 6 months longer
+const parentsOf = (sid) => Object.values(db.users).filter((u) => u.parentOf === sid);
+/* Is this parent's pass active? While their student is verified, and for 6 months after the verification ends. */
+function parentPassFor(u) {
+  if (!u.parentOf || !db.users[u.parentOf]) return null;
+  const s = db.users[u.parentOf], sum = studentVerify.summary(s);
+  let until = sum.validUntil || null;
+  if (until) { const d = new Date(until + 'T12:00'); d.setMonth(d.getMonth() + PARENT_GRACE_MONTHS); until = d.toISOString().slice(0, 10); }
+  const active = Boolean(studentVerify.clientVerified(s)) || Boolean(until && until >= new Date().toISOString().slice(0, 10));
+  return { student: s.firstName, active, until, booking: firstBooking(u.id) };
+}
+
 /* A member's first booking that is still valid (cancelled bookings don't count), reduced to what the bonus needs. */
 function firstBooking(uid) {
   const trips = ((db.userData[uid] || {}).trips || []).filter((t) => t && t.status !== 'Cancelled' && Array.isArray(t.segments) && t.segments.length);
@@ -154,7 +173,10 @@ router.get('/me/referrals', auth, (req, res) => {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((u) => ({ name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), student: Boolean(studentVerify.clientVerified(u)), booking: firstBooking(u.id) }));
   const inviter = req.user.invitedBy && Object.values(db.users).find((u) => u.refCode === req.user.invitedBy);
-  res.json({ ok: true, referrals: list, invited: inviter ? { inviterStudent: Boolean(studentVerify.clientVerified(inviter)), booking: firstBooking(req.user.id) } : null });
+  const parents = parentsOf(req.user.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((u) => ({ name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), booking: firstBooking(u.id) }));
+  res.json({ ok: true, referrals: list, invited: inviter ? { inviterStudent: Boolean(studentVerify.clientVerified(inviter)), booking: firstBooking(req.user.id) } : null,
+    parents, parentMax: PARENT_MAX, parentPass: parentPassFor(req.user) });
 });
 
 module.exports = { router, auth, userFromReq, ageOn, isModerator };

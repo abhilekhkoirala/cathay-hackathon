@@ -189,8 +189,8 @@ app.use('/api', require('./chat-server').router);
 app.use('/api', studentVerify.createRouter({ auth: accounts.auth }));
 
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
-const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/chat.js': 'chat.js', '/chat-config.js': 'chat-config.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };
-app.get(Object.keys(FILES), (req, res) => res.sendFile(path.join(__dirname, FILES[req.path]), (err) => { if (err && !res.headersSent) res.status(404).end(); })); // optional files (chat-config.js) may not exist
+const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };
+app.get(Object.keys(FILES), (req, res) => res.sendFile(path.join(__dirname, FILES[req.path]), (err) => { if (err && !res.headersSent) res.status(404).end(); })); // a listed file may be missing on some hosts
 
 if (require.main === module) {
   app.listen(PORT, () => {

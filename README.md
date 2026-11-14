@@ -38,7 +38,7 @@ Economy is sold as **Light, Essential and Flex**, as on cathaypacific.com: on **
 
 ## Landing page (`landing.html`)
 
-A cinematic, scroll-driven opening page for the pitch: one camera move from a jet at the gate at sunset, into the cabin window, out above the clouds and into the light, with two-line headlines (Family Circle → student seating → student points → "Stay in the circle. Until 25.") and a counter in the corner. Below it: Cathay at a glance, what's inside the app (live features + coming next) and why it works for Cathay. Every button opens the app (`index.html`).
+A cinematic, scroll-driven opening page for the pitch: one camera move from a jet at the gate on a bright day, into the cabin window, out above the clouds and into the light, with two-line headlines (join at 18 → where the students fly → student seating → student points → "First flight to first job.") and a counter in the corner. Below it: Cathay at a glance, what's inside the app (live features + coming next) and why it works for Cathay. Every button opens the app (`index.html`).
 
 - Drawn entirely on a `<canvas>` (no images or libraries), so it works offline; respects *reduce motion*.
 - `landing.html?p=0.5` freezes the story at that point (useful for screenshots and slides).
@@ -58,6 +58,8 @@ With `npm start` (or on a cloud machine, see below), every phone that opens the 
 2. Book the same flight for tomorrow with "Yes" to student seating.
 3. Check in on both: each is seated next to the other.
 4. Open *See how students are seated* on a laptop and sell the seat planned for one of them. Both phones re-seat live.
+
+**Demo data (rehearsals and the pitch):** `BASE=http://<server> DATE=<YYYY-MM-DD> node scripts/demo-setup.js` creates demo accounts through the normal API (the app has no built-in users): two presenter accounts and three more verified students booked on one flight, plus reviewer and moderator accounts. It is safe to run again. The reviewer email must be in `VERIFIERS` on the server.
 
 **Without the server** (any static host, `python3 -m http.server`), everything still works per device in localStorage.
 
@@ -206,6 +208,10 @@ A group chat per flight for verified students, run by our server (`chat-server.j
 - **Moderators reading reported content.**
 - **Retaliation protections.**
 
+## Parent Pass
+
+A verified student invites **up to 2 parents** with a Parent Pass link (`#/p/CODE`, on the student perks page). The parent sees what they get, creates a normal account (no passport scan) and their trips come with **+1 checked bag (23 kg)** and a **free date change**. Their **first booked trip** earns a welcome bonus of **20% of its Asia Miles**. It's valid while the student is verified **and 6 months after** (the graduation trip). The app nudges the student when graduation is within 6 months or their first trip to the university's country is coming up. Parents get no student features and never see their student's chats or seat. Links from members who aren't verified students do nothing, and the server enforces the limit of 2 parents.
+
 ## Student perks
 
 Unlocked automatically by the verified student membership (*Points & rewards*, or the *Student perks* quick link on the Overview), no promo codes:
@@ -215,7 +221,7 @@ Unlocked automatically by the verified student membership (*Points & rewards*, o
 | **Free travel adapter** | A welcome gift for new students: a free adapter for the country of their university (worked out from the verified email: `cuhk.edu.hk` → Hong Kong, Type G; `.ac.uk` → UK; `.edu` → US…), on their first flight to that country, handed out on board by the crew. **Once per study programme.** Not offered when the home plugs are the same. Shown on the trip page and the boarding pass. | A few HK$, once per student, only for those who claim it (crew loads exactly what was claimed). |
 | **Invite friends** | Personal link (`#/r/NAME-XXXX`); it opens sign-up with a pop-up explaining the bonus, and the inviter gets the same explanation the first time they scroll to their invite card. When the friend books their **first flight** (cancelled bookings don't count), **both** get a bonus based on the Asia Miles a normal member earns on that booking: a non-student gets **20%** of it as Asia Miles; a verified student gets **¼ of the booking's student points** (¼ × 1.5 = 0.375 per mile) as student points. Up to 10 friends. Friends show as *Friend J.* (initial only). | The bonus is paid only for a real booking; the student side costs ≈ 0.375 × 0.7 × 0.85 ≈ 0.22 miles per mile, close to the 0.20 of a non-student, while students get more. |
 | **Student points** | While studying, flights earn 1.5 student points for every Asia Mile a normal member would earn (*instead of* miles; credited at check-in). Asia Miles from cards, partners and invites keep coming as usual. Both balances show side by side on the member card. Points are **spent during studies** on Economy trips, from each trip page (*Pay with student points*) or the perks page: Wi-Fi messaging pass (1,000), full-flight Wi-Fi (5,000), preferred seat if still empty at check-in (1,000), lounge pass (6,000). At graduation **70% of what's left converts to Asia Miles**, the rest expires. | Cathay pays ≈ 0.89× normal miles, students get 1.05×; every reward is priced at or above its cost to Cathay (maths below). |
-| **Graduation gift** | One status tier up for **12 months** (e.g. Gold → Diamond) + 3,000 bonus miles + the student points conversion. Expected graduation date can be saved. | A few lounge visits and miles, to keep the graduate when they start flying for work. |
+| **Graduation gift** | **70% of the student points convert to Asia Miles** (always), plus **one status tier up for 12 months** (e.g. Gold → Diamond) **only if the student flew Cathay at least once in their last 18 months as a student**. The card shows whether the upgrade is unlocked. Expected graduation date can be saved. | A few lounge visits and miles, to keep the graduate when they start flying for work. |
 
 **Why 70%?** Let k = 1.5 student points per normal mile, r = share converted, p ≈ 85% = students who actually convert at graduation (drop-outs, inactive accounts). Breakage on Asia Miles is the same for everyone, so it cancels out.
 
@@ -232,9 +238,9 @@ Unlocked automatically by the verified student membership (*Points & rewards*, o
 
 **Rewards during studies:** a student point costs Cathay at most 0.7 × 0.85 × US$0.006 ≈ US$0.0036 if converted. None of these rewards is in the current student fare (which already includes extra baggage and a free date change): Wi-Fi in Economy is paid (US$3.95 messaging on flights up to 6 h, US$12.95–24.95 full Wi-Fi), lounge passes (US$75) can only be bought from Silver tier up, and preferred seats are paid on Light/Essential fares. Messaging pass 1,000 pts ≈ US$3.60 and full Wi-Fi 5,000 pts ≈ US$18 are close to the retail price, so Cathay breaks even even counting lost sales; an empty preferred seat costs ~US$0; a lounge visit (~US$20) is priced 6,000 pts ≈ US$21.60.
 
-70% still breaks even if up to 95% of students convert (1 / (1.5 × 0.95) = 70.2%). The graduation gift (≈ 5,500 miles' worth, ~34% of a typical student's 16,000 miles over 4 years) is covered by the 11% saved on points plus ≈ US$20 of extra margin per student over 4 years (at ~US$0.006 per mile): one extra Cathay flight from one student in five. *(Assumptions to validate with Cathay's real data.)*
+70% still breaks even if up to 95% of students convert (1 / (1.5 × 0.95) = 70.2%). The graduation gift adds no miles of its own: the conversion is already in the 0.89× above, and the one-tier-up upgrade for 12 months is given only to students who flew Cathay in their last 18 months as a student, so its cost (mainly a few lounge visits) is spent on active customers right before they start flying for work. *(Assumptions to validate with Cathay's real data.)*
 
-Miles from perks are added to the member card; the graduation status shows on the member card and header. *Simulate graduation (demo)* shows the graduation gift, since nobody graduates during a pitch. Every balance change (check-in points, welcome bonus, seat unlocks, rewards, invites) is listed under *Recent activity*.
+Miles from perks are added to the member card; the graduation status shows on the member card and header. Graduation is processed at the end of student status (by Cathay's systems in production; there is no button for it in the app); until then the card shows whether the tier upgrade is unlocked, which is the nudge to keep flying. Every balance change (check-in points, welcome bonus, seat unlocks, rewards, invites) is listed under *Recent activity*.
 
 ## What works
 

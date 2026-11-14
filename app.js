@@ -181,7 +181,7 @@
     const email = String(f.get('email') || '').trim().toLowerCase(), password = String(f.get('password') || '');
     let r;
     if (signup) {
-      const b = { firstName: String(f.get('firstName')).trim(), lastName: String(f.get('lastName')).trim(), email, password, dob: f.get('dob'), invite: f.get('invite') || '' };
+      const b = { firstName: String(f.get('firstName')).trim(), lastName: String(f.get('lastName')).trim(), email, password, dob: f.get('dob'), invite: f.get('invite') || '', parentInvite: f.get('parentInvite') || '' };
       r = LIVE.on ? await authCall('POST', '/auth/signup', b) : await localSignup(b);
     } else {
       r = LIVE.on ? await authCall('POST', '/auth/login', { email, password }) : await localLogin(email, password);
@@ -189,7 +189,7 @@
     btn.disabled = false;
     if (!r.ok) { err.textContent = r.error || 'Something went wrong. Try again.'; err.hidden = false; return; }
     useAccount(r.token, r.user, r.data);
-    if (signup) store.set('invite', '');
+    if (signup) { store.set('invite', ''); store.set('parentInvite', ''); }
     toast(signup ? `Welcome, ${r.user.firstName}! Your member number is ${r.user.memberId}.` : `Signed in as ${r.user.firstName}`);
     location.hash = '#/home'; render();
     fetchVerification(true);
@@ -552,7 +552,10 @@
   /* spRate: student points per Asia Mile a normal member would earn. spConvert: share converted to
    * Asia Miles at graduation (rest expires). With ~85% of students converting, Cathay pays
    * 1.5 × 0.70 × 0.85 ≈ 0.89 of normal miles while students get 1.05× (break-even up to 95% converting). */
-  const PERKS = { referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500, inviteAlpha: 0.2, inviteStudentShare: 0.25 };
+  const PERKS = { referralCap: 10, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500, inviteAlpha: 0.2, inviteStudentShare: 0.25, parentBonus: 0.2, parentBags: 1, parentMax: 2, gradWindowMonths: 18 };
+  /* Parent Pass: a verified student invites up to 2 parents. A parent's trips include +1 checked bag (23 kg) and a free
+   * date change; their first booked trip earns a welcome bonus of 20% of the flight's Asia Miles (same rule as invites).
+   * Valid while the student is verified and 6 months after (the graduation trip). Parents get no student features. */
   /* Invites: when the invited friend makes their first booking (cancelled bookings don't count), BOTH sides get a bonus.
    * A non-student side gets inviteAlpha (20%) of the Asia Miles a normal member earns on that booking, as Asia Miles.
    * A student side gets inviteStudentShare (1/4) of the student points that booking earns (1.5 per mile), as student points
@@ -596,8 +599,25 @@
     if (adapterClaimed(p)) return findTrip(p.adapter.ref) || null;
     return upcoming().find((t) => { const s = t.segments[0]; return (airport(s.to) || {}).country === studyCountry() && plugNeeded(s); }) || null;
   }
+  /* Graduation gift rule: awarded only if the student flew Cathay at least once (a checked-in trip) in the last
+   * 18 months of their student status, i.e. the 18 months before graduation. It rewards active members, not sign-ups,
+   * and nudges one more booking just before they become high-value. The 70% points conversion is not part of the gift. */
+  function gradDateOf(p) {
+    const m = p.gradMonth || ((user.verified && user.verified.until) || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(m)) return new Date();
+    const d = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0, 23, 59); // last day of the graduation month
+    return d > new Date() ? d : new Date();
+  }
+  function gradEligibility(p = perks()) {
+    const end = gradDateOf(p), start = new Date(end);
+    start.setMonth(start.getMonth() - PERKS.gradWindowMonths);
+    const flown = trips.filter((t) => t.checkedIn && t.status !== 'Cancelled').flatMap((t) => t.segments)
+      .filter((s) => { const d = new Date(s.dep); return d >= start && d <= end; })
+      .sort((a, b) => b.dep.localeCompare(a.dep));
+    return { ok: flown.length > 0, last: flown[0] || null, start, end };
+  }
   function gradBoostUntil(p) {
-    if (!p.graduated) return null;
+    if (!p.graduated || p.gradGift === false) return null;
     const until = new Date(p.graduated);
     until.setMonth(until.getMonth() + PERKS.boostMonths);
     return until > new Date() ? until : null;
@@ -609,7 +629,7 @@
     fetchRefs.at = Date.now();
     authCall('GET', '/me/referrals').then((r) => {
       if (!r.ok) return;
-      const next = { referrals: r.referrals || [], invited: r.invited || null };
+      const next = { referrals: r.referrals || [], invited: r.invited || null, parents: r.parents || [], parentMax: r.parentMax || 2, parentPass: r.parentPass || null };
       if (JSON.stringify(next) === JSON.stringify(refsCache)) return;
       refsCache = next; rerender();
     });
@@ -628,13 +648,15 @@
     });
     const inv = refsCache.invited;
     if (inv && inv.booking) out.push({ ...inviteBonus(inv.booking), title: 'Your first flight with an invite', date: inv.booking.bought, note: 'Invite bonus' });
+    const pp = refsCache.parentPass;
+    if (pp && pp.active && pp.booking) out.push({ amount: Math.round(bookingMiles(pp.booking) * PERKS.parentBonus), unit: 'miles', title: 'Parent Pass: first-visit welcome bonus', date: pp.booking.bought, note: `Invited by ${pp.student}` });
     return out;
   }
   const inviteSp = () => inviteCredits().filter((c) => c.unit === 'pts').reduce((n, c) => n + c.amount, 0);
   /* Miles from perks: invite bonuses (non-student side) and the graduation gift. */
   function perkMiles(p = perks()) {
     return {
-      credited: inviteCredits().filter((c) => c.unit === 'miles').reduce((n, c) => n + c.amount, 0) + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
+      credited: inviteCredits().filter((c) => c.unit === 'miles').reduce((n, c) => n + c.amount, 0) + (p.graduated ? p.gradConverted || 0 : 0),
       pending: 0,
     };
   }
@@ -648,7 +670,7 @@
     (p.redeemed || []).forEach((r) => out.push({ title: rewardName(r.id), date: day(r.at), note: 'Trip ' + r.ref, pts: -r.pts }));
     (p.seatBuys || []).forEach((b) => out.push({ title: 'Seat choice', date: day(b.at), note: 'Trip ' + b.ref, pts: -b.amount, unit: b.with === 'miles' ? 'miles' : 'pts' }));
     inviteCredits().forEach((c) => out.push({ title: c.title, date: day(c.date), note: c.note, pts: c.amount, unit: c.unit }));
-    if (p.graduated) out.push({ title: 'Graduation gift', date: day(p.graduated), note: 'Bonus + converted points', pts: PERKS.gradMiles + (p.gradConverted || 0), unit: 'miles' });
+    if (p.graduated) out.push({ title: 'Graduation: student points converted', date: day(p.graduated), note: `${Math.round(PERKS.spConvert * 100)}% of your student points${p.gradGift === false ? '' : ' · plus one tier up'}`, pts: p.gradConverted || 0, unit: 'miles' });
     return out.sort((a, b) => b.date.localeCompare(a.date));
   }
   const earnedThisMonth = () => {
@@ -835,7 +857,7 @@
     return `<div class="home ${next ? '' : 'noflight'}">
       <header class="pagehead"><div><p class="crumb">Overview</p><h1><span class="g">${greet},</span> <span class="n">${esc(user.firstName)}</span></h1>
         <p class="sub">Your trips and Asia Miles in one place.</p></div></header>
-      ${verifyNotice() || studentBanner()}
+      ${(fetchRefs(), parentPassActive()) ? `<div class="banner parent-banner">${icon('heart')}<span><b>Parent Pass from ${esc(refsCache.parentPass.student)}</b><br><span class="muted sm">Your trips include +${PERKS.parentBags} checked bag and a free date change; your first trip earns a welcome bonus. Valid until ${esc(refsCache.parentPass.until || 'their graduation')}.</span></span></div>` : verifyNotice() || studentBanner()}
       <div class="g2">${milesCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
       ${quickBookCard()}
       <div class="sect-head" style="margin-top:20px"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(activity()[0])}
@@ -875,7 +897,8 @@
           ['up', 'Student points', 'Earn 1.5 student points per mile on your flights. Spend them on Wi-Fi, seats and lounges; 70% of what is left becomes Asia Miles at graduation.'],
           ['plug', 'Free travel adapter', "On your first flight to your university's country, handed to you by the crew. Once per study programme."],
           ['share', 'Invite friends', `When a friend joins with your link and books their first flight, you both get a bonus: ${Math.round(PERKS.spRate * PERKS.inviteStudentShare * 1000) / 1000} student points per mile for students, ${Math.round(PERKS.inviteAlpha * 100)}% of the flight's Asia Miles otherwise.`],
-          ['cap', 'Graduation gift', `One tier up for ${PERKS.boostMonths} months and ${PERKS.gradMiles.toLocaleString()} bonus miles, for your first work trips.`],
+          ['heart', 'Parent Pass', `Invite up to ${PERKS.parentMax} parents: +1 bag, a free date change and a welcome bonus on their trips to visit you, valid until 6 months after you graduate.`],
+          ['cap', 'Graduation gift', `${Math.round(PERKS.spConvert * 100)}% of your student points become Asia Miles, plus one tier up for ${PERKS.boostMonths} months if you flew Cathay in your last ${PERKS.gradWindowMonths} months as a student.`],
           ['chat', 'Student flight chat', 'A moderated group chat for verified students on your flight, open 7 days before departure. Group only, no private messages.'],
           ['tag', 'Student card (proposed)', 'A student card with our card partner: no income requirement, earns student points on everyday spending, upgrades at graduation. Concept only, not available.'],
         ].map(([ic, h, p]) => `<div class="card disc">${icon(ic)}<h3>${h}</h3><p class="muted sm">${p}</p></div>`).join('')}
@@ -928,6 +951,61 @@
       ${rows}
     </div>`;
   }
+  /* ---------- Parent Pass (student side; parents only see a banner and get their benefits automatically) ---------- */
+  const PARENT_DEALS = [
+    ['bag', `+${PERKS.parentBags} checked bag (23 kg)`, 'on every Parent Pass trip', 'Low marginal cost, high perceived value'],
+    ['calendar', 'Free date change', 'book the graduation trip early, adjust later', 'Early bookings; flexible dates fill low-load flights'],
+    ['gift', 'First-visit welcome bonus', `${Math.round(PERKS.parentBonus * 100)}% of the first trip's Asia Miles`, 'Paid only on a booked trip'],
+    ['heart', 'Student pays it back', "use your own miles for their ticket (add them as redemption nominees)", 'Uses miles already earned'],
+  ];
+  const parentLink = () => `${location.origin}${location.pathname}#/p/${user.refCode}`;
+  /* The right moment to invite parents: graduation within 6 months, or the first trip to the university's country. */
+  function parentNudge() {
+    const gm = perks().gradMonth;
+    if (gm) {
+      const months = (Number(gm.slice(0, 4)) - new Date().getFullYear()) * 12 + Number(gm.slice(5, 7)) - (new Date().getMonth() + 1);
+      if (months >= 0 && months <= 6) return `Graduation is in ${months <= 1 ? 'less than 2 months' : months + ' months'}: invite your parents.`;
+    }
+    if (user.verified && adapterTrip()) return 'Moving in soon? Invite your parents to visit you this term.';
+    return '';
+  }
+  function parentPassCard() {
+    fetchRefs();
+    const r = refsCache || {}, list = r.parents || [], max = r.parentMax || PERKS.parentMax, nudge = parentNudge();
+    const rows = list.map((x) => `<div class="perk-row"><div><b>Parent ${esc(x.name)}</b><div class="muted sm">Joined ${fmtDate(x.joined + 'T12:00', { day: 'numeric', month: 'short' })} · ${x.booking ? `booked ${esc(x.booking.segments[0].from)} → ${esc(x.booking.segments[x.booking.segments.length - 1].to)}` : 'no trip booked yet'}</div></div>
+      <span class="badge${x.booking ? ' ok' : ''}">${x.booking ? 'Parent Pass trip booked' : 'Member'}</span></div>`).join('');
+    return `<div class="card perk parent-pass" id="parentCard">
+      <div class="perk-head">${icon('heart')}<div><h3>Parent Pass</h3><p class="muted sm">Graduation is the one trip parents almost never miss. Invite up to ${max} parents: their trips come with extras, valid while you study and for 6 months after you graduate. <button type="button" class="link-btn" data-action="parent-info" data-who="student">Why it's worth it</button></p></div></div>
+      ${nudge ? `<div class="sz-choice yes"><span>${icon('calendar')} ${esc(nudge)}</span></div>` : ''}
+      <div class="pp-deals">${PARENT_DEALS.map(([ic, h, s]) => `<div>${icon(ic)}<b>${h}</b><span class="muted sm">${s}</span></div>`).join('')}</div>
+      ${list.length < max ? (isLocalAccount() ? '<p class="muted sm">Parent Pass needs an online account.</p>' : `<div class="ref-link"><span class="mono">${esc(parentLink())}</span><button class="btn btn-primary sm-btn" data-action="parent-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>`) : `<p class="muted sm">You've invited ${max} parents (the maximum).</p>`}
+      ${rows}
+      <p class="muted sm">Parents become regular Cathay members. They don't get student features and never see your chats or seats.</p>
+    </div>`;
+  }
+  /* who: 'student' (why it's worth it, incl. what Cathay gains) or 'parent' (a parent opening the link). */
+  function parentInfo(who) {
+    document.querySelector('.modal-bg')?.remove();
+    const parent = who === 'parent';
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <div class="modal promo" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="ppTitle">
+          <div class="promo-hero"><span class="promo-badge">${icon('heart')} Parent Pass</span>
+            <h2 id="ppTitle">${parent ? 'Your student invited you' : 'Bring your parents to your graduation'}</h2>
+            <p>${parent ? 'Create a free Cathay account: your trips to visit your student come with extras.' : 'Almost every student living away gets a parent visit. Parent Pass makes that trip easy, and makes it a Cathay trip.'}</p></div>
+          <ul class="promo-list">
+            ${PARENT_DEALS.map(([ic, h, s]) => `<li>${icon(ic)}<span><b>${h}</b>: ${s}.</span></li>`).join('')}
+            <li>${icon('calendar')}<span><b>Valid</b> while ${parent ? 'your student is' : "you're"} a verified student and 6 months after graduation, so the graduation trip is covered.</span></li>
+            ${parent ? `<li>${icon('shield')}<span>No passport scan or extra checks to join. You won't see your student's chats or seats.</span></li>` : `<li>${icon('up')}<span><b>For you:</b> up to ${PERKS.parentMax} parents. They join as regular members and never see your chats or seat.</span></li>`}
+          </ul>
+          ${parent && !user ? '<a class="btn btn-primary block" href="#/signup" data-action="modal-close">Create my account</a>' : '<button class="btn btn-primary block" data-action="modal-close">Got it</button>'}
+          <div style="height:16px"></div>
+        </div>
+      </div>`);
+    $('.modal.promo .btn').focus();
+  }
+  const parentPassActive = () => Boolean(refsCache && refsCache.parentPass && refsCache.parentPass.active);
+
   /* Explains the invite rules. who: 'inviter' (my link) or 'invited' (I came through a friend's link). */
   function inviteInfo(who) {
     const miles = bookingMiles(EXAMPLE);
@@ -1117,6 +1195,7 @@
       ${backLink('#/results', 'Back to flights')}
       <h1>Review & pay</h1>
       <div class="card">${flightLine(s.out)}${s.back ? flightLine(s.back) : ''}
+        ${parentPassActive() ? `<div class="sum-row sm"><span>${icon('heart')} Parent Pass</span><b>+${PERKS.parentBags} checked bag (23 kg) · free date change</b></div>` : ''}
         <hr><div class="sum-row"><span>Fare (${s.pax} × ${esc(s.cabin)})</span><b>${money(fare)}</b></div>
         <div class="sum-row"><span>Taxes & charges</span><b>${money(taxes)}</b></div>
         <div class="sum-row total"><span>Total</span><b>${money(fare + taxes)}</b></div></div>
@@ -1192,6 +1271,7 @@
           <div><span>Seat</span><b>${esc(s.seat)}</b></div><div><span>Group</span><b>${t.cabin === 'Economy' ? '4' : '1'}</b></div>
         </div>
         ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nearText(nb) : 'Student seating'}</div>` : ''}
+        ${t.parentPass ? `<div class="pass-zone">${icon('heart')} Parent Pass · +${PERKS.parentBags} checked bag (23 kg)</div>` : ''}
         ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(REWARDS.find((x) => x.id === r.id).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
         ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
@@ -1709,6 +1789,8 @@
           <label class="field"><span>Password (8+ characters)</span><input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
           <label class="field"><span>Date of birth</span><input type="date" name="dob" max="${todayStr()}" required></label>
           <input type="hidden" name="invite" value="${esc(invite)}">
+          <input type="hidden" name="parentInvite" value="${esc(store.get('parentInvite', ''))}">
+          ${store.get('parentInvite', '') ? `<div class="sz-choice yes"><span>${icon('heart')} Parent Pass from your student: +1 bag, free date change and a welcome bonus on your first trip.</span></div>` : ''}
           <p id="signupErr" class="err" hidden></p>
           <button class="btn btn-primary block" type="submit">Create account</button>
           <a class="btn btn-ghost block" href="#/signin">I already have an account</a>
@@ -1747,6 +1829,7 @@
       </div>
 
       ${inviteCard()}
+      ${parentPassCard()}
 
       <div class="card perk">
         <div class="perk-head">${icon('tag')}<div><h3>Student points</h3><p class="muted sm">Your flights earn ${PERKS.spRate} student points for every Asia Mile a normal member would earn (instead of miles). Spend them on student rewards now; when you graduate, ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles and the rest expires.</p></div></div>
@@ -1773,21 +1856,26 @@
 
       <div class="card perk">
         <div class="perk-head">${icon('cap')}<div><h3>Graduation gift</h3><p class="muted sm">When you graduate, we celebrate with you.</p></div></div>
-        ${p.graduated
+        ${p.graduated && p.gradGift === false
+          ? `<div class="sz-choice no"><span>Tier upgrade not awarded: no Cathay flight in your last ${PERKS.gradWindowMonths} months as a student.</span></div>
+             <ul class="perk-list"><li>${icon('check')} ${(p.gradConverted || 0).toLocaleString()} Asia Miles from your student points (always converted)</li></ul>`
+          : p.graduated
           ? `<div class="sz-choice yes"><span>Congratulations, graduate!</span></div>
              <ul class="perk-list"><li>${icon('check')} ${esc(nextTier)} status ${boost ? `until ${fmtDate(toISO(boost), { day: 'numeric', month: 'short', year: 'numeric' })}` : '(ended)'}</li>
-             <li>${icon('check')} ${PERKS.gradMiles.toLocaleString()} bonus miles credited</li>
-             <li>${icon('check')} ${(p.gradConverted || 0).toLocaleString()} Asia Miles from your student points</li></ul>
-             <button class="btn btn-ghost block sm-btn" data-action="grad-undo">Undo graduation (demo)</button>`
+             <li>${icon('check')} ${(p.gradConverted || 0).toLocaleString()} Asia Miles from your student points</li></ul>`
           : `<ul class="perk-list"><li>${icon('check')} ${esc(nextTier)} status for ${PERKS.boostMonths} months (one tier up)</li>
-             <li>${icon('check')} ${PERKS.gradMiles.toLocaleString()} bonus miles</li>
              <li>${icon('check')} ${Math.round(PERKS.spConvert * 100)}% of your student points converted to Asia Miles</li></ul>
              <form id="gradForm" class="row gap-sm grad-form">
                <label class="field"><span>Expected graduation</span><input type="month" name="grad" value="${esc(gradMonth)}" required></label>
                <button class="btn btn-ghost sm-btn" type="submit">Save</button>
              </form>
              ${gradMonth ? `<p class="muted sm">Your gift unlocks when you graduate in ${fmtDate(gradMonth + '-01T12:00', { month: 'long', year: 'numeric' })}.</p>` : ''}
-             <button class="btn btn-primary block sm-btn" data-action="grad-demo">Simulate graduation (demo)</button>`}
+             ${(() => {
+               const e = gradEligibility(p), from = fmtDate(toISO(e.start), { month: 'short', year: 'numeric' });
+               return e.ok
+                 ? `<div class="sz-choice yes"><span>${icon('check')} Tier upgrade unlocked: you flew ${esc(e.last.from)} → ${esc(e.last.to)} on ${fmtDate(e.last.dep, { day: 'numeric', month: 'short', year: 'numeric' })}, within your last ${PERKS.gradWindowMonths} months as a student.</span></div>`
+                 : `<div class="sz-choice no"><span>Tier upgrade not unlocked yet: fly Cathay at least once between ${from} and your graduation.</span><a class="link-btn" href="#/book">Book a flight</a></div>`;
+             })()}`}
       </div>
     </div>`;
   };
@@ -1795,6 +1883,13 @@
   views.perks = () => redirect('#/rewards');
 
   /* Invite link: remember the code for sign-up. */
+  /* Parent Pass link: remember the code for sign-up and explain what the parent gets. */
+  views.p = (code) => {
+    store.set('parentInvite', String(code || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20));
+    if (user) { toast('Parent Pass links are for new members.'); return redirect('#/home'); }
+    setTimeout(() => parentInfo('parent'), 400);
+    return redirect('#/signup');
+  };
   views.r = (code) => {
     store.set('invite', String(code || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20));
     if (user) { toast('Invite links are for new members.'); return redirect('#/home'); }
@@ -1802,7 +1897,7 @@
     return redirect('#/signup');
   };
 
-  /* ---------- flight chat (transports live in chat.js) ---------- */
+  /* ---------- flight chat: see the student flight chat section (chat-server.js) ---------- */
   /* ---------- student flight chat (chat-server.js enforces every rule server-side) ---------- */
   let chatConn = null;
   function chatLeave() { if (chatConn) { chatConn.close(); chatConn = null; } }
@@ -2105,7 +2200,7 @@
 
   /* ---------- router ---------- */
   const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation', 'review']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile' };
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', p: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -2114,6 +2209,8 @@
 
   function render() {
     chatLeave();
+    // Welcome bonus once per verified account, also when the verification happened on another device or by a reviewer.
+    if (user && user.verified && !isLocalAccount() && !perks().welcome && !perks().graduated) grantWelcome();
     const [r, a, b] = route();
     const name = views[r] ? r : 'home';
     if (PROTECTED.has(name) && !user) { location.hash = '#/signin'; return; }
@@ -2278,18 +2375,18 @@
       if (liveAccount()) await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, null), active: true });
       rerender(); flashTick('Back to automatic seating');
     },
+    'parent-info'(el) { parentInfo(el.dataset.who === 'parent' ? 'parent' : 'student'); },
+    'parent-copy'() {
+      const link = parentLink();
+      if (navigator.share) { navigator.share({ title: 'Parent Pass', text: 'Join Cathay with my Parent Pass: an extra bag and a welcome bonus when you come to visit.', url: link }).catch(() => {}); return; }
+      (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Parent Pass link copied'), () => toast(link));
+    },
     'invite-info'(el) { inviteInfo(el.dataset.who === 'invited' ? 'invited' : 'inviter'); },
     'ref-copy'() {
       const link = refLink();
       if (navigator.share) { navigator.share({ title: 'Fly with me on Cathay', text: 'Verify as a student with my link and we both get bonus miles.', url: link }).catch(() => {}); return; }
       (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Invite link copied'), () => toast(link));
     },
-    'grad-demo'() {
-      const p = perks();
-      p.graduated = toISO(new Date()); p.gradPoints = spLeft(p); p.gradConverted = spConverted(p.gradPoints); savePerks(p); rerender();
-      showModal('Congratulations, graduate!', `Enjoy ${SZ.tierUp(user.tier)} status for ${PERKS.boostMonths} months, ${PERKS.gradMiles.toLocaleString()} bonus miles and ${p.gradConverted.toLocaleString()} Asia Miles from your student points.`);
-    },
-    'grad-undo'() { const p = perks(); delete p.graduated; delete p.gradConverted; delete p.gradPoints; savePerks(p); rerender(); },
     redeem(el) {
       const rw = REWARDS.find((r) => r.id === el.dataset.id), t = findTrip(el.dataset.ref);
       const err = redeem(t, rw);
@@ -2346,6 +2443,7 @@
       };
       if (f.get('szSeat')) t.studentSeat = f.get('szSeat') === 'yes';
       if (t.studentSeat) t.showUni = f.get('szShowUni') === 'on';
+      if (parentPassActive()) t.parentPass = true;
       t.fare = s.out.fare || null;
       trips.push(t); saveTrips(); retrieved.add(ref);
       search.out = null; search.back = null; search.step = 'out'; search.to = '';

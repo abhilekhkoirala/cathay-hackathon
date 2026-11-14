@@ -565,3 +565,9 @@ a.sz-choice{text-decoration:none}
 .sd-chip span{font-size:12px;color:var(--muted)}.sd-chip b{font-size:13.5px}.sd-chip small{display:flex;align-items:center;gap:4px;font-size:12px;color:#0b6b45;font-weight:600}
 .sd-chip small .ico,.sd-badge .ico{width:13px;height:13px}
 .sd-badge{display:inline-flex;align-items:center;gap:4px;margin:4px 0;padding:3px 8px;border-radius:999px;background:#e8f5ee;color:#0b6b45;font-size:11.5px;font-weight:600}
+
+/* Parent Pass */
+.pp-deals{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:4px 0 10px}
+.pp-deals>div{display:grid;gap:3px;padding:12px;border-radius:12px;background:var(--mint,#eef4ec)}
+.pp-deals .ico{width:20px;height:20px;color:var(--brand)}.pp-deals b{font-size:14px}
+.parent-banner{margin:0 0 18px}

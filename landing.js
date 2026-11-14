@@ -257,8 +257,8 @@
     railFill.style.height = (p * 100).toFixed(1) + '%';
     hint.style.opacity = p > 0.03 ? 0 : 1;
     let lab, val;
-    if (p < 0.22) { lab = 'Family miles'; val = '1,500 · 2,900 · 3,800 · 4,100'; }
-    else if (p < 0.42) { lab = 'Family miles, together'; val = fmt(lerp(1500, 12300, band(p, 0.22, 0.36))); }
+    if (p < 0.22) { lab = 'Welcome points'; val = fmt(lerp(0, 1500, band(p, 0.02, 0.16))); }
+    else if (p < 0.42) { lab = 'Students on nearby dates'; val = '3+ · 5+ · 10+'; }
     else if (p < 0.62) { lab = 'Students on your flight'; val = '8 · seated side by side'; }
     else if (p < 0.82) { lab = 'Student points'; val = fmt(lerp(0, 3330, band(p, 0.63, 0.76))); }
     else { lab = 'Altitude'; val = fmt(lerp(28000, 41000, band(p, 0.82, 1))) + ' ft'; }
