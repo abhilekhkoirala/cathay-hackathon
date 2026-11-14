@@ -67,6 +67,7 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+    cap: '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2 9 2 12 0v-5M22 9v6"/>',
   };
   const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.info}</svg>`;
 
@@ -86,6 +87,8 @@
   const retrieved = new Set();
   const vs = { step: 'email', email: '', demo: false, demoCode: '', msg: '', busy: false, localCode: null, localExpires: 0 };
   const search = { type: 'return', from: 'HKG', to: '', depart: shiftDate(todayStr(), 14), ret: shiftDate(todayStr(), 21), cabin: 'Economy', pax: 1, step: 'out', out: null, back: null };
+  const SZ = window.AURELIA_SZ;
+  const seatSel = { key: '', seat: '' };
 
   function loadState() {
     trips = store.get('trips', null);
@@ -156,11 +159,58 @@
     const s0 = t.segments[0];
     return `
     <a class="card trip-card" href="#/trip/${t.ref}">
-      <div class="row between"><b>${tripLabel(t)}</b>${badge(t.status)}</div>
+      <div class="row between"><b>${tripLabel(t)}</b><span class="row gap-sm">${user && isUpcoming(t) && studentTrip(t) ? `<span class="sz-pill">${icon('cap')} Student</span>` : ''}${badge(t.status)}</span></div>
       <div class="muted sm">${fmtDate(s0.dep)} · ${fmtTime(s0.dep)}${t.segments.length > 1 ? ' · returns ' + fmtDate(t.segments[1].dep, { day: 'numeric', month: 'short' }) : ''}</div>
       <div class="row between small-row"><span class="muted sm">Ref <b class="mono">${t.ref}</b> · ${esc(t.cabin)}</span>
       ${isUpcoming(t) ? `<span class="pill">${countdown(s0.dep)}</span>` : ''}</div>
     </a>`;
+  }
+
+  /* ---------- student seating ---------- */
+  const studentOk = (iso) => Boolean(user && user.verified && SZ.isAdult(user.dob, iso));
+  const studentTrip = (t) => t.cabin === 'Economy' && studentOk(t.segments[0].dep);
+  const who = (x) => `<b>${esc(x.name)}</b> · ${esc(x.uni)}`;
+
+  /* Re-runs the student seat planner for one flight with every seat sold so far, and remembers the
+   * result so students only move when a seat planned for them is bought. */
+  function seatPlan(t, i) {
+    const s = t.segments[i], key = SZ.flightKey(s);
+    const me = studentTrip(t)
+      ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null }
+      : null;
+    const sold = [...(store.get('sales', {})[key] || [])];
+    if (!me && s.seat) sold.push(s.seat);
+    const plans = store.get('seatplans', {});
+    const p = SZ.plan(s, { me, sold, prev: plans[key] });
+    plans[key] = p.seatOf;
+    store.set('seatplans', plans);
+    return p;
+  }
+
+  /* Shown in the booking form and on the trip page when the user isn't a verified adult student. */
+  function studentGate(iso) {
+    if (!user) return '';
+    if (!user.verified) return `<a class="banner" href="#/verify">${icon('cap')}<span><b>Fly next to other students</b><br><span class="muted sm">Verify your student status and we'll seat you next to another student.</span></span>${icon('arrow')}</a>`;
+    if (!SZ.isAdult(user.dob, iso)) return `<div class="card empty sm">Student seating is open to verified students aged 18+.</div>`;
+    return '';
+  }
+
+  function studentCard(t) {
+    if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
+    const planner = `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See how students are seated (demo)</a>`;
+    if (!studentTrip(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
+    const lines = t.segments.map((s, i) => {
+      const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
+      return `<div class="sum-row"><span>${esc(s.number)} · ${s.from} → ${s.to}</span><b>${p.students.length - 1} other students</b></div>
+        ${t.checkedIn && nb.length ? `<p class="sm" style="margin:0 0 6px">Seat ${esc(s.seat)}, next to ${nb.map(who).join(' and ')}</p>` : ''}`;
+    }).join('');
+    return `
+    <div class="card sz-card">
+      <div class="row between"><h3>${icon('cap')} Student seating</h3>${tick()}</div>
+      <p class="muted sm" style="margin:0 0 6px">You're a verified student, so we'll seat you next to another student, from your university when we can. Your seat is picked for you at check-in.</p>
+      ${lines}
+      ${planner}
+    </div>`;
   }
 
   /* ---------- views ---------- */
@@ -308,6 +358,7 @@
         <div class="sum-row total"><span>Total</span><b>${money(fare + taxes)}</b></div></div>
       <form id="confirmForm" class="card form">
         <h3>Passengers</h3>${pax}
+        ${s.cabin === 'Economy' ? (studentOk(s.out.dep) ? `<div class="sz-note sm">${icon('cap')}<span>You're a verified student, so we'll seat you next to another student on this flight, from your university when we can.</span></div>` : studentGate(s.out.dep)) : ''}
         <label class="field"><span>Contact email</span><input type="email" name="email" required value="${user ? esc(user.email) : ''}"></label>
         <label class="field"><span>Payment</span><input value="Demo card •••• 4242 (no real payment)" disabled></label>
         <button class="btn btn-primary block" type="submit">Confirm booking · ${money(fare + taxes)}</button>
@@ -343,11 +394,12 @@
         <div class="sum-row"><span>Total paid</span><b>${money(t.total)}</b></div>
         <div class="sum-row"><span>Baggage</span><b>${t.cabin === 'Economy' ? '1 × 23 kg' : t.cabin === 'Premium Economy' ? '2 × 23 kg' : '2 × 32 kg'}</b></div>
       </div>
+      ${studentCard(t)}
       ${up ? `<div class="stack">
         ${t.checkedIn
           ? t.segments.map((s, i) => `<a class="btn btn-primary block" href="#/boarding/${t.ref}/${i}">Boarding pass · ${s.from} → ${s.to}</a>`).join('')
           : canCheckIn(t)
-            ? `<button class="btn btn-primary block" data-action="checkin" data-ref="${t.ref}">Check in online</button>`
+            ? `<button class="btn btn-primary block" data-action="checkin" data-ref="${t.ref}">${t.cabin === 'Economy' ? 'Check in & choose seat' : 'Check in online'}</button>`
             : `<div class="card empty sm">Online check-in opens 48 hours before departure.</div>`}
         <button class="btn btn-danger block" data-action="cancel" data-ref="${t.ref}">Cancel booking</button></div>` : ''}
     </div>`;
@@ -360,11 +412,13 @@
     if (!t.checkedIn) return redirect('#/trip/' + ref);
     const seed = ref + idx;
     const p = t.pax[0];
+    const plan = studentTrip(t) ? seatPlan(t, Number(idx)) : null;
+    const me = plan && plan.students.find((x) => x.me), nb = me ? plan.neighboursOf(me) : [];
     return `
     <div class="narrow">
       ${backLink('#/trip/' + ref, 'Back to trip')}
       <div class="pass">
-        <div class="pass-top"><span>Aurelia Air · Boarding pass</span><span>${esc(t.cabin)}</span></div>
+        <div class="pass-top"><span>Aurelia Air · Boarding pass</span><span class="row gap-sm">${me ? `<span class="pass-tag">${icon('cap')} STUDENT</span>` : ''}${esc(t.cabin)}</span></div>
         <div class="pass-name">${esc((p.last + '/' + p.first).toUpperCase())}</div>
         <div class="pass-route"><div><b>${s.from}</b><span>${city(s.from)}</span></div>${icon('plane', 'big')}<div class="right"><b>${s.to}</b><span>${city(s.to)}</span></div></div>
         <div class="pass-grid">
@@ -373,9 +427,126 @@
           <div><span>Gate</span><b>${gateFor(seed)}</b></div><div><span>Terminal</span><b>${termFor(seed)}</b></div>
           <div><span>Seat</span><b>${esc(s.seat)}</b></div><div><span>Group</span><b>${t.cabin === 'Economy' ? '4' : '1'}</b></div>
         </div>
+        ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nb.map((x) => `${esc(x.name)} (${esc(x.uni)})`).join(' and ') : 'Student'}</div>` : ''}
         <div class="pass-cut"></div>
         <div class="qr">${barcode(seed)}</div>
         <div class="muted center sm">DEMO PASS — not valid for travel · ${t.ref}</div>
+      </div>
+    </div>`;
+  };
+
+  let seatCtx = null; // trip, segment index and student seat plan of the open seat map / planner
+
+  /* Economy seat map; cell(id) returns the markup for one seat. */
+  function seatGrid(c, cell) {
+    const aisle = '<span class="aisle"></span>';
+    const rows = [`<div class="srow letters"><span class="rnum"></span>${c.blocks.map((b) => b.map((L) => `<span class="seat-l">${L}</span>`).join('')).join(aisle)}</div>`];
+    for (let r = c.first; r <= c.last; r++) rows.push(`<div class="srow"><span class="rnum">${r}</span>${c.blocks.map((b) => b.map((L) => cell(r + L)).join('')).join(aisle)}</div>`);
+    return `<div class="seatmap">${rows.join('')}</div>`;
+  }
+  const seatEl = (id, cls, inner = '', action = '', label = '') => action
+    ? `<button class="seat ${cls}" data-action="${action}" data-seat="${id}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</button>`
+    : `<span class="seat ${cls}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</span>`;
+  const legend = (items) => `<div class="legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
+
+  views.seats = (ref, idx) => {
+    const t = findTrip(ref), i = Number(idx), s = t && t.segments[i];
+    if (!t || !s) return notFound();
+    if (t.checkedIn || !canCheckIn(t)) return redirect('#/trip/' + ref);
+    const p = seatPlan(t, i), c = p.cabin, me = p.students.find((x) => x.me);
+    seatCtx = { t, i, p };
+    const head = `${backLink('#/trip/' + ref, 'Back to trip')}
+      <p class="eyebrow">Check-in · flight ${i + 1} of ${t.segments.length}</p>
+      <h1>${me ? 'Your seat' : 'Choose your seat'}</h1>
+      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)} · ${esc(s.aircraft)}</p>`;
+
+    if (me && p.seatOf.me) {
+      // Students don't choose: the planner has already put them next to other students.
+      const mine = p.seatOf.me, nb = p.neighboursOf(me), near = new Set(nb.map((x) => p.seatOf[x.id]));
+      seatSel.seat = mine;
+      const cell = (id) => id === mine ? seatEl(id, 'mine', id.slice(-1), '', ', your seat')
+        : near.has(id) ? seatEl(id, 'stu', icon('cap'), '', ', ' + p.at[id].name)
+        : p.paid.has(id) || p.at[id] ? seatEl(id, 'taken') : seatEl(id, 'free');
+      return `
+      <div class="narrow wide">${head}
+        <div class="seat-layout">
+          <div>${legend([['lg-mine', 'You'], ['lg-stu', 'Student next to you'], ['lg-taken', 'Taken'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
+          <div class="seat-side">
+            <div class="card sz-card">
+              <p class="eyebrow">We've seated you in</p>
+              <div class="seat-big">${mine}</div>
+              ${nb.length
+                ? `<p class="sm" style="margin:0">Next to ${nb.map((x) => `${who(x)} · ${esc(x.year)}, ${esc(x.field)}`).join('<br>and ')}</p>
+                   ${nb.some((x) => x.uni === me.uni) ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}`
+                : `<p class="sm" style="margin:0">No other student could be seated next to you yet. We keep trying until check-in closes.</p>`}
+              <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Student seats are assigned automatically.</p>
+            </div>
+            <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">Check in · seat ${mine}</button></div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    if (seatSel.key !== ref + i) { seatSel.key = ref + i; seatSel.seat = s.seat || ''; }
+    const cell = (id) => id === seatSel.seat ? seatEl(id, 'mine', id.slice(-1), 'pick-seat')
+      : p.paid.has(id) ? seatEl(id, 'taken') : seatEl(id, 'free', id.slice(-1), 'pick-seat', ', free');
+    return `
+    <div class="narrow wide">${head}
+      <div class="seat-layout">
+        <div>${legend([['lg-free', 'Free'], ['lg-taken', 'Taken'], ['lg-mine', 'Your seat']])}${seatGrid(c, cell)}</div>
+        <div class="seat-side">
+          <div class="card sm">Pick any free seat.</div>
+          <div class="seat-bar">
+            <button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat" ${seatSel.seat ? '' : 'disabled'}>${seatSel.seat ? 'Confirm seat ' + seatSel.seat : 'Pick a seat'}</button>
+            <button class="btn btn-ghost block sm-btn" data-action="auto-seat">Assign me a seat</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  /* Demo / operations view: sell seats and watch the planner re-seat students. */
+  const planner = { key: '', log: [], moved: new Set() };
+  views.planner = (ref, idx) => {
+    const t = findTrip(ref), i = Number(idx || 0), s = t && t.segments[i];
+    if (!t || !s) return notFound();
+    const p = seatPlan(t, i), c = p.cabin;
+    seatCtx = { t, i, p };
+    if (planner.key !== SZ.flightKey(s)) Object.assign(planner, { key: SZ.flightKey(s), log: [], moved: new Set() });
+    const groupOf = {};
+    p.groups.forEach((g) => g.seats.forEach((id) => { groupOf[id] = g; }));
+    const cell = (id) => {
+      const x = p.at[id], moved = planner.moved.has(id) ? ' moved' : '';
+      if (x) {
+        const g = groupOf[id], kind = x.me ? 'mine' : g.members.length < 2 ? 'solo' : g.sameUni ? 'stu' : 'mix';
+        return seatEl(id, kind + moved, x.me ? 'You' : esc(x.name.slice(0, 2)), x.locked ? '' : 'plan-sell', `, ${x.me ? 'you' : x.name} · ${x.uni}`);
+      }
+      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', paying passenger') : seatEl(id, 'free', '', 'plan-sell', ', free');
+    };
+    const multi = p.groups.filter((g) => g.members.length > 1);
+    const alone = p.students.filter((x) => p.seatOf[x.id] && !p.neighboursOf(x).length).length;
+    const range = (g) => g.seats.length > 1 ? `${g.seats[0]}–${g.seats[g.seats.length - 1].slice(-1)}` : g.seats[0];
+    return `
+    <div class="narrow wide">
+      ${backLink('#/trip/' + ref, 'Back to trip')}
+      <p class="eyebrow">Demo · operations view</p>
+      <h1>Student seating planner</h1>
+      <p class="muted">${esc(s.number)} · ${city(s.from)} → ${city(s.to)} · ${fmtDate(s.dep)}${t.segments.length > 1 ? ' · ' + t.segments.map((x, j) => j === i ? `<b>${x.from}→${x.to}</b>` : `<a href="#/planner/${t.ref}/${j}">${x.from}→${x.to}</a>`).join(' | ') : ''}</p>
+      <div class="seat-layout">
+        <div>${legend([['lg-stu', 'Students, same university'], ['lg-mix', 'Students, mixed'], ['lg-solo', 'Student alone'], ['lg-mine', 'You'], ['lg-taken', 'Paying passenger'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
+        <div class="seat-side">
+          <div class="card sm"><b>Tap any seat to sell it to a paying passenger.</b>
+            <span class="muted">Verified students are seated automatically in groups of 2–3 side by side, from the same university when possible; every other seat stays on sale. If a seat planned for a student is sold, the planner re-runs and moves only that student's group.</span></div>
+          <div class="card plan-stats">
+            <div><b>${p.students.length}</b><span>students</span></div><div><b>${multi.length}</b><span>groups</span></div>
+            <div><b>${multi.filter((g) => g.sameUni).length}</b><span>same uni</span></div><div><b>${alone}</b><span>alone</span></div>
+          </div>
+          <div class="card"><h3>Changes</h3>
+            ${planner.log.length ? planner.log.map((l) => `<p class="sm plan-log">${l}</p>`).join('') : '<p class="muted sm">No seats sold yet.</p>'}
+            <button class="btn btn-ghost block sm-btn" data-action="plan-reset">Reset this flight</button></div>
+          <div class="card"><h3>Student groups</h3>
+            ${p.groups.map((g) => `<div class="sum-row sm"><span class="mono">${range(g)}</span><span>${g.members.map((m) => esc(m.me ? 'You' : m.name)).join(', ')}</span><b>${g.members.length < 2 ? 'alone' : g.sameUni ? esc(g.members[0].uni) : 'mixed'}</b></div>`).join('')}</div>
+        </div>
       </div>
     </div>`;
   };
@@ -542,7 +713,7 @@
 
   /* ---------- router ---------- */
   const PROTECTED = new Set(['trips', 'profile', 'verify']);
-  const NAV_GROUP = { home: 'home', book: 'book', results: 'book', confirm: 'book', trips: 'trips', trip: 'trips', boarding: 'trips', profile: 'profile', verify: 'profile', signin: 'profile', tools: 'tools', status: 'tools', baggage: 'tools', retrieve: 'tools', timetable: 'tools' };
+  const NAV_GROUP = { home: 'home', book: 'book', results: 'book', confirm: 'book', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', profile: 'profile', verify: 'profile', signin: 'profile', tools: 'tools', status: 'tools', baggage: 'tools', retrieve: 'tools', timetable: 'tools' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -553,7 +724,7 @@
     const [r, a, b] = route();
     const name = views[r] ? r : 'home';
     if (PROTECTED.has(name) && !user) { location.hash = '#/signin'; return; }
-    if ((name === 'trip' || name === 'boarding') && !user && !retrieved.has(a)) { location.hash = '#/retrieve'; return; }
+    if ((name === 'trip' || name === 'boarding' || name === 'seats' || name === 'planner') && !user && !retrieved.has(a)) { location.hash = '#/retrieve'; return; }
     $('#view').innerHTML = views[name](a, b);
     document.body.dataset.route = name;
     renderChrome(NAV_GROUP[name]);
@@ -603,9 +774,50 @@
     'trips-tab'(el) { tripsTab = el.dataset.tab; render(); },
     checkin(el) {
       const t = findTrip(el.dataset.ref);
+      if (t.cabin === 'Economy') { seatSel.key = ''; location.hash = `#/seats/${t.ref}/0`; return; }
       t.checkedIn = true;
       t.segments.forEach((s, i) => { if (!s.seat) s.seat = (10 + (hash(t.ref + i) % 30)) + 'ABCDEF'[hash(t.ref + i + 's') % 6]; });
       saveTrips(); toast('Checked in. Boarding pass ready.'); render();
+    },
+    'pick-seat'(el) {
+      seatSel.seat = el.dataset.seat;
+      document.querySelectorAll('.seat.mine').forEach((x) => x.classList.remove('mine'));
+      const cell = document.querySelector(`.seat[data-seat="${seatSel.seat}"]`);
+      if (cell) { cell.classList.add('mine'); if (cell !== el) cell.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      const b = $('#seatConfirm');
+      b.disabled = false; b.textContent = 'Confirm seat ' + seatSel.seat;
+    },
+    'confirm-seat'() {
+      const { t, i } = seatCtx;
+      t.segments[i].seat = seatSel.seat;
+      seatSel.key = '';
+      if (i < t.segments.length - 1) { saveTrips(); location.hash = `#/seats/${t.ref}/${i + 1}`; return; }
+      t.checkedIn = true; saveTrips(); toast('Checked in. Boarding pass ready.');
+      location.hash = '#/trip/' + t.ref;
+    },
+    'auto-seat'() {
+      const { p } = seatCtx, ids = SZ.allSeats(p.cabin);
+      const seat = ids.find((id) => !p.paid.has(id) && !p.at[id]) || ids.find((id) => !p.paid.has(id));
+      if (seat) actions['pick-seat']({ dataset: { seat } });
+    },
+    'plan-sell'(el) {
+      const { t, i, p: before } = seatCtx, id = el.dataset.seat, key = SZ.flightKey(t.segments[i]);
+      const sales = store.get('sales', {});
+      sales[key] = [...(sales[key] || []), id];
+      store.set('sales', sales);
+      const after = seatPlan(t, i), x = before.at[id];
+      const moves = after.moved.map((m) => `${esc(m.me ? 'You' : m.name)} ${before.seatOf[m.id]} → ${after.seatOf[m.id]}`);
+      planner.moved = new Set(after.moved.map((m) => after.seatOf[m.id]));
+      planner.log.unshift(`<b>${id}</b> sold to a paying passenger${x ? ` (planned for ${esc(x.me ? 'you' : x.name)})` : ''}. ${moves.length ? 'Re-seated: ' + moves.join(', ') + '.' : 'No student had to move.'}`);
+      const y = window.scrollY; render(); window.scrollTo(0, y);
+    },
+    'plan-reset'() {
+      const { t, i } = seatCtx, key = SZ.flightKey(t.segments[i]);
+      const sales = store.get('sales', {}), plans = store.get('seatplans', {});
+      delete sales[key]; delete plans[key];
+      store.set('sales', sales); store.set('seatplans', plans);
+      Object.assign(planner, { log: [], moved: new Set() });
+      const y = window.scrollY; render(); window.scrollTo(0, y);
     },
     cancel(el) {
       if (!confirm('Cancel this booking? (demo)')) return;
@@ -613,7 +825,7 @@
     },
     signout() { store.set('loggedOut', true); user = null; toast('Signed out.'); location.hash = '#/home'; render(); },
     'demo-login'() { store.set('loggedOut', false); loadState(); toast('Signed in as John Doe'); location.hash = '#/home'; render(); },
-    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
+    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('sales', {}); store.set('seatplans', {}); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
     unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },

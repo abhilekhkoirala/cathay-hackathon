@@ -23,7 +23,7 @@ Without any SMTP settings the app runs in **demo mode**: the 6-digit code is sho
 | Password | `demo1234` |
 | Member no. | AU 8800 1234 (Gold) |
 
-Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `R3T9WD` (HKG → LHR) · `P8C4HN` (past). *Profile → Reset demo data* restores everything.
+Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `M7S2HK` (Moscow → HKG, Economy, check-in open, student seating demo) · `R3T9WD` (HKG → LHR) · `P8C4HN` (past). *Profile → Reset demo data* restores everything.
 
 ## Student verification ("Aurelia Student Verify")
 
@@ -48,11 +48,35 @@ Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `R3T9WD` (HKG → LHR)
 - To send real email from a hosted site, deploy `server.js` somewhere (Render, Fly, EC2, a container…), set the `.env` values there, set `ALLOWED_ORIGIN` to your Pages origin, and set `apiBase` in `config.js` to the backend URL.
 - State (pending codes) is in memory — fine for a demo; use Redis/DynamoDB if you scale it.
 
+## Student seating
+
+Verified students (18+) are automatically seated next to another student, so a student flying to a new city for the first time can talk to people going to the same university about campus, housing, getting there and everything else, instead of just sleeping through the flight. Students don't fill in or choose anything: being verified is enough.
+
+There is **no student section**. The planner seats students in small groups of 2–3 side by side, e.g. `9A 9B 9C`, then `13A 13B`, from the same university when possible, otherwise any students. **Every other seat stays on sale.** When a paying passenger buys a seat that was planned for a student, the planner re-runs and moves only the students whose group was broken; everyone else keeps their seat. A student's seat is fixed once they check in.
+
+**Demo flow** (after *Profile → Reset demo data* and verifying with e.g. `name@link.cuhk.edu.hk`):
+
+1. *My trips* → `M7S2HK` Moscow → Hong Kong: the *Student seating* card shows how many other students are on the flight.
+2. **Check in** → *Your seat*: the seat is already chosen, next to another student (e.g. *"40G, next to Mei · CUHK · Same university as you"*).
+3. The boarding pass shows a **STUDENT** tag and who you're seated next to.
+4. **See how students are seated (demo)** opens the planner: tap any seat to sell it to a paying passenger and watch the affected students get re-seated (the change log lists every move).
+
+Non-students check in with a normal seat map and can pick any free seat, including seats the planner had in mind for students.
+
+**How the planner decides**
+
+1. Students who still sit next to another student keep their seats; checked-in students never move.
+2. Everyone else is grouped: same-university groups of 3 or 2 first, then mixed groups (never a group of 1 if it can be avoided).
+3. Each group goes into the tightest run of free seats side by side that fits, so bigger gaps stay free for paying passengers.
+4. If a group doesn't fit: split it, pair leftover students together, sit them beside any seated student, or borrow one student from a group of 3. Only as a last resort does a student sit alone.
+
+All other students and paying passengers on a flight are **simulated** (generated per flight in `student-zone.js`).
+
 ## What works
 
 - **Home** — next trip, membership card, offers, verify banner
 - **Book** — return / one-way search, date strip, outbound + return selection, passenger form → booking saved in localStorage
-- **My trips** — upcoming / past, details, online check-in, boarding pass (demo QR), cancel
+- **My trips** — upcoming / past, details, online check-in with seat map (Economy), automatic student seating + seating planner, boarding pass (demo QR), cancel
 - **Retrieve booking** — works signed out (`K7M2QX` + `Doe`)
 - **Travel tools** — flight status, timetable, baggage calculator (others are placeholders)
 - **Profile** — membership progress, preferences, student verification, sign out
@@ -63,7 +87,8 @@ Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `R3T9WD` (HKG → LHR)
 index.html    app shell
 styles.css    responsive styles (tab bar < 860px, top nav above)
 data.js       airports, flight generator, seeded John Doe + trips
-app.js        router, views, booking / check-in / verification UI
+student-zone.js  simulated students per flight, economy cabin layout, student seat planner
+app.js        router, views, booking / check-in / seat map / verification UI
 config.js     apiBase for the verification backend
 server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health
 mobile.html   phone-frame wrapper around index.html
@@ -72,4 +97,4 @@ mobile.html   phone-frame wrapper around index.html
 
 ## Ideas to extend
 
-Seat-map picker, live flight-status API, disruption re-booking assistant, multilingual UI, student-only fares behind the green tick, PWA install.
+Live flight-status API, disruption re-booking assistant, multilingual UI, student-only fares behind the green tick, PWA install.

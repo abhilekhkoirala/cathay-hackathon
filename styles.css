@@ -192,3 +192,56 @@ input:focus,select:focus,.btn:focus-visible{outline:2px solid var(--brand2);outl
 .verify-done{text-align:center;display:grid;justify-items:center;gap:6px;padding:32px 20px}
 .verify-done .btn{margin-top:10px}
 @media (max-width:860px){.tick-av{display:inline-flex}.chip-text .tick{display:none}}
+
+/* student seating */
+.row.gap-sm{gap:6px}
+.sz-note{display:flex;align-items:flex-start;gap:10px;border:1px solid #cfe9db;background:#f3fbf6;border-radius:14px;padding:12px 14px;color:#17784f}
+.sz-card{border-color:#cfe9db;background:#f3fbf6;box-shadow:none;margin:12px 0;display:grid;gap:4px}
+.sz-card h3{display:flex;align-items:center;gap:8px;margin:0}
+.sz-pill{display:inline-flex;align-items:center;gap:4px;background:#e3f6ec;color:#17784f;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px}
+.sz-pill .ico,.sz-card .ico,.sz-note .ico,.pass-zone .ico,.pass-tag .ico{width:16px;height:16px}
+.sz-same{display:flex;align-items:center;gap:6px;color:#17784f;font-weight:600;margin:6px 0 0}
+.seat-big{font-size:40px;font-weight:800;color:var(--brand);line-height:1.1}
+
+/* seat map */
+.seat-layout{display:grid;grid-template-columns:1fr 320px;gap:20px;align-items:start}
+.seat-side{position:sticky;top:80px;display:grid;gap:12px}
+.seat-side .card{margin:0}
+.seat-bar{display:grid;gap:8px}
+.seatmap{background:#fff;border:1px solid var(--line);border-radius:40px 40px 16px 16px;padding:24px 10px 16px;display:grid;gap:4px;justify-content:center;overflow-x:auto}
+.srow{display:flex;align-items:center;gap:4px;padding:2px 8px}
+.srow.letters{padding-bottom:4px}
+.rnum{width:22px;font-size:11px;color:var(--muted);text-align:right;margin-right:4px;flex:none}
+.aisle{width:16px;flex:none}
+.seat,.seat-l{width:30px;height:30px;flex:none}
+.seat-l{display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--muted)}
+.seat{border-radius:8px 8px 4px 4px;border:1px solid #c9cde3;background:#fff;font:600 11px/1 inherit;font-family:inherit;color:var(--muted);padding:0;display:grid;place-items:center}
+button.seat{cursor:pointer}
+button.seat:hover{border-color:var(--brand)}
+.seat.taken{background:#e6e8f2;border-color:#e6e8f2}
+.seat.stu{background:#22a559;border-color:#22a559;color:#fff}
+.seat.mix{background:#3a8fd8;border-color:#3a8fd8;color:#fff}
+.seat.solo{background:#f4a340;border-color:#f4a340;color:#3b2600}
+.seat.mine{background:var(--brand);border-color:var(--brand);color:#fff;font-size:10px}
+.seat .ico{width:16px;height:16px}
+.seat.moved{animation:moved 1.2s ease-out 3;box-shadow:0 0 0 3px #fff,0 0 0 5px var(--brand2)}
+@keyframes moved{0%{transform:scale(1.35)}100%{transform:scale(1)}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin:0 0 10px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:4px;vertical-align:-2px;margin-right:5px;border:1px solid #c9cde3;background:#fff}
+.legend .lg-taken{background:#e6e8f2;border-color:#e6e8f2}.legend .lg-stu{background:#22a559;border-color:#22a559}
+.legend .lg-mix{background:#3a8fd8;border-color:#3a8fd8}.legend .lg-solo{background:#f4a340;border-color:#f4a340}
+.legend .lg-mine{background:var(--brand);border-color:var(--brand)}
+.plan-stats{display:grid;grid-template-columns:repeat(4,1fr);text-align:center;gap:4px}
+.plan-stats b{display:block;font-size:22px;color:var(--brand)}.plan-stats span{font-size:11px;color:var(--muted)}
+.plan-log{margin:0 0 8px;padding-left:10px;border-left:3px solid var(--brand2)}
+
+/* boarding pass: student */
+.pass-tag{display:inline-flex;align-items:center;gap:4px;background:#22a559;color:#fff;border-radius:999px;padding:2px 10px;font-size:11px;letter-spacing:.08em}
+.pass-zone{display:flex;align-items:center;gap:8px;margin:0 18px 16px;padding:10px 12px;background:#e3f6ec;color:#17784f;border-radius:12px;font-size:13px;font-weight:600}
+
+@media (max-width:860px){
+  .seat-layout{grid-template-columns:1fr}
+  .seat-side{position:static}
+}
+@media (max-width:420px){.seat,.seat-l{width:26px;height:26px}.srow{gap:3px;padding:2px 4px}.aisle{width:8px}.seatmap{padding:20px 4px 12px}}
+@media (prefers-reduced-motion:reduce){.seat.moved{animation:none}}
