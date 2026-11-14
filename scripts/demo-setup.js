@@ -82,6 +82,8 @@ async function makeStudent(p, reviewerToken) {
     }, a.token);
     if (up.status !== 200) throw new Error(`${p.email} student ID: ${up.error}`);
   }
+  // STUDENT_AUTO_APPROVE on the server may already have approved the upload: then there's nothing to review.
+  if (((await call('GET', '/api/student/status', null, a.token)).verification || {}).status === 'verified') return a;
   const d = await call('POST', `/api/review/${a.user.id}/decision`, { decision: 'approve' }, reviewerToken);
   if (d.status !== 200) throw new Error(`approve ${p.email}: ${d.error} (is ${REVIEWER} listed in VERIFIERS on the server?)`);
   return a;

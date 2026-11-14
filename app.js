@@ -516,7 +516,6 @@
   const REWARDS = [
     { id: 'msg', icon: 'chat', name: 'Wi-Fi messaging pass', pts: 1000, note: 'WhatsApp, iMessage, WeChat… for the whole flight.' },
     { id: 'wifi', icon: 'wifi', name: 'Full-flight Wi-Fi', pts: 5000, note: 'Browse and stream for the whole flight.' },
-    { id: 'seat', icon: 'seat', name: 'Preferred seat', pts: 1000, note: 'Front or extra-legroom seat, if still empty at check-in.' },
     { id: 'lounge', icon: 'lounge', name: 'Lounge pass', pts: 6000, note: 'One lounge visit before your flight.' },
   ]; // Economy trips only: premium cabins already include them.
   const spSpent = (p) => (p.redeemed || []).reduce((n, r) => n + r.pts, 0) + (p.seatBuys || []).filter((b) => b.with === 'sp').reduce((n, b) => n + b.amount, 0);
@@ -533,7 +532,7 @@
     return '';
   }
   const tripRewards = (t) => (user && user.verified ? (perks().redeemed || []).filter((r) => r.ref === t.ref) : []);
-  const rewardName = (id) => REWARDS.find((r) => r.id === id).name;
+  const rewardName = (id) => (REWARDS.find((r) => r.id === id) || { name: id === 'seat' ? 'Preferred seat' : 'Reward' }).name; // older redemptions may refer to removed rewards
   const perks = () => store.get('perks', null) || {};
   const savePerks = (p) => store.set('perks', p);
   const plugNeeded = (s) => Boolean(SZ.plugFor(s.to)) && SZ.plugFor(s.to) !== SZ.plugFor(s.from);
@@ -752,7 +751,7 @@
     <span class="arrow d-only">${icon('ext')}</span><span class="spark m-only">${icon('sparkle')}</span></a>`;
 
   const quickLinks = () => `<section class="card ql d-only"><h4>Quick links</h4>
-    <a class="qrow" href="#/baggage">${icon('bag')}<div><b>Student baggage</b><span class="s">Know your allowance</span></div></a>
+    <a class="qrow" href="#/baggage">${icon('bag')}<div><b>Baggage FAQ</b><span class="s">Know your allowance</span></div></a>
     <a class="qrow" href="#/rewards">${icon('gift')}<div><b>Student perks</b><span class="s">Free adapter, invites, graduation gift</span></div></a>
     <button class="qrow" type="button" data-action="soon" data-label="Campus community">${icon('ring')}<div><b>Campus community</b><span class="s">Connect with student travellers</span></div></button></section>`;
 
@@ -1235,7 +1234,7 @@
         </div>
         ${me ? `<div class="pass-zone">${icon('cap')} Student seating${nb && nb.students ? ' · next to ' + nearbyText(nb) : ''}</div>` : ''}
         ${t.parentPass ? `<div class="pass-zone">${icon('heart')} Companion Pass · +${PERKS.parentBags} checked bag (23 kg)</div>` : ''}
-        ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(REWARDS.find((x) => x.id === r.id).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
+        ${tripRewards(t).map((r) => `<div class="pass-zone">${icon((REWARDS.find((x) => x.id === r.id) || { icon: 'seat' }).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
         ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
         <div class="qr">${barcode(seed)}</div>
@@ -1268,7 +1267,9 @@
   function seatGrid(c, cell, zone) {
     const aisle = '<span class="aisle"></span>', inZone = (r) => zone && r >= zone[0] && r <= zone[1];
     const rows = [`<div class="srow letters"><span class="rnum"></span>${c.blocks.map((b) => b.map((L) => `<span class="seat-l">${L}</span>`).join('')).join(aisle)}</div>`];
+    const legroom = !c.name || c.name === 'Economy' || c.name === 'Premium Economy'; // first row of the cabin: extra legroom
     for (let r = c.first; r <= c.last; r++) {
+      if (legroom && r === c.first) rows.push(`<div class="row-cap legroom" aria-hidden="true"><span>${icon('up')} Extra legroom</span></div>`);
       if (zone && r === zone[0]) rows.push(`<div class="zone-cap" aria-hidden="true"><span>${icon('cap')} Student Zone</span></div>`);
       rows.push(`<div class="srow${inZone(r) ? ' zrow' : ''}${zone && r === zone[1] ? ' zlast' : ''}"><span class="rnum">${r}</span>${c.blocks.map((b) => b.map((L) => cell(r + L)).join('')).join(aisle)}</div>`);
     }
@@ -1692,7 +1693,7 @@
   }
 
   const TOOLS = [
-    ['Travel essentials', [['ticket', 'Boarding pass', '#/trips'], ['info', 'Travel information'], ['calendar', 'Flight timetable', '#/timetable'], ['clock', 'Flight status', '#/status'], ['refund', 'Rebook and refund', '#/trips'], ['calc', 'Baggage calculator', '#/baggage'], ['alert', 'Delays and cancellations', '#/status']]],
+    ['Travel essentials', [['ticket', 'Boarding pass', '#/trips'], ['info', 'Travel information'], ['calendar', 'Flight timetable', '#/timetable'], ['clock', 'Flight status', '#/status'], ['refund', 'Rebook and refund', '#/trips'], ['bag', 'Baggage FAQ', '#/baggage'], ['alert', 'Delays and cancellations', '#/status']]],
     ['Prepare your trip', [['hotel', 'Book a hotel'], ['plane', 'Book a package'], ['shield', 'Travel insurance'], ['car', 'Rent a car'], ['ticket', 'Book activities'], ['bag', 'Shop curated picks']]],
     ['Flying with us', [['seat', 'Cabin classes'], ['tv', 'Inflight experience'], ['lounge', 'Lounges'], ['pin', 'Airport information'], ['plane', 'Aircraft and fleet'], ['heart', 'Passenger assistance']]],
     ['Travel inspiration', [['pin', 'Where we fly', '#/book'], ['bulb', 'Inspiration'], ['tag', 'Discover the best fares', '#/book']]],
@@ -1721,13 +1722,21 @@
         <button class="btn btn-primary block" type="submit">Check status</button></form>
       <div id="statusOut"></div></div>`;
 
+  /* Baggage FAQ for students. Allowances as published for Cathay's Economy fares (Light / Essential / Flex);
+   * the e-ticket always shows the exact allowance for an itinerary. */
+  const BAG_FAQ = [
+    ['How many checked bags do I get?', 'Economy Light: 1 bag of up to 23 kg. Economy Essential and Economy Flex: 2 bags of up to 23 kg each. A few routes differ (for example US and Canada routes, or Hong Kong to Auckland and Christchurch), so check the allowance on your e-ticket.'],
+    ['What can I take in the cabin?', 'In Economy: one cabin bag of up to 7 kg, plus one small personal item such as a laptop bag or handbag.'],
+    ['Moving abroad for a semester: which fare should I pick?', 'If you are bringing a lot, Economy Essential or Flex include 2 checked bags instead of 1, so you may not need to buy extra baggage.'],
+    ['Do students get extra baggage?', "Cathay's Student Fare includes an extra checked bag. Check the fare rules of your booking to see what applies to your ticket."],
+    ['Are my parents visiting? ', 'A Companion Pass visit includes +1 checked bag (23 kg) for the parent, once during your studies.'],
+    ['Where do I see my exact allowance?', 'On your e-ticket and in My flights, under the booking. If anything differs from this page, your e-ticket is what counts.'],
+  ];
   views.baggage = () => `
-    <div class="narrow">${backLink('#/tools', 'Travel tools')}<h1>Baggage calculator</h1>
-      <form id="baggageForm" class="card form">
-        <label class="field"><span>Cabin</span><select name="cabin">${CABINS.map((c) => `<option>${c}</option>`).join('')}</select></label>
-        <div class="two"><label class="field"><span>Bags you plan to check</span><input type="number" name="bags" min="0" max="8" value="1"></label>
-        <label class="field"><span>Weight per bag (kg)</span><input type="number" name="kg" min="1" max="45" value="26"></label></div>
-        <div id="baggageOut"></div></form></div>`;
+    <div class="narrow">${backLink('#/tools', 'Travel tools')}<h1>Baggage FAQ</h1>
+      <div class="stack faq">${BAG_FAQ.map(([q, a]) => `<details class="card faq-item"><summary>${esc(q)}</summary><p class="muted">${esc(a)}</p></details>`).join('')}</div>
+      <p class="muted sm">Based on Cathay's published Economy fare allowances. Always check your e-ticket.</p>
+    </div>`;
 
   views.retrieve = () => `
     <div class="narrow">
