@@ -65,10 +65,72 @@ With `npm start` (or on a cloud machine, see below), every phone that opens the 
 
 ## Student verification ("Cathay Student Verify")
 
-1. Settings → **Verify student status** (or the banner on *Student offers*).
+Two steps, both checked on the server. A university email alone shows access to a mailbox, not current enrolment, so a student ID is now required too.
+
+**Step 1: university email** (unchanged, `server.js`)
+1. Settings → **Verify student status** (or any "verify" banner).
 2. Enter any email whose domain has an `edu` label: `name@mit.edu`, `name@cuhk.edu.hk`, `name@student.unsw.edu.au`. (`gmail.com`, `notedu.com` and `edu.com` are rejected.)
-3. A 6-digit code is emailed (or shown on screen in demo mode). It expires in 10 minutes, allows 5 attempts, and can be resent every 30 s.
-4. After confirming, a **green tick** appears next to the username in the header, on the home greeting, the member card and the profile.
+3. A 6-digit code is emailed (or shown on screen in demo mode). It expires in 10 minutes, allows 5 attempts, and can be resent every 30 s. One university email can be linked to only one Cathay account at a time.
+
+**Step 2: student ID** (`student-verify.js`)
+4. Upload a photo, screenshot or PDF of the student ID (JPG, PNG or PDF, up to 5 MB): from files or the camera, with a preview and *Replace* / *Remove*. The page lists what must be readable (full name, institution, expiry date if any, photo if any) and says the ID number may be covered.
+5. Confirm the name and institution as shown, and the expiry date, or tick **"My card doesn't show an expiry date"**. Cards without one are **not rejected**: the student can add an **enrolment letter or official digital student-status record**, or submit anyway; a reviewer then sets validity to the end of the academic year.
+6. A reviewer approves or asks for more information. The **green tick** and every student feature appear only after approval.
+
+### Statuses
+
+| Status | Meaning / next step shown to the student |
+|---|---|
+| Not submitted | Start with your university email. |
+| Awaiting document upload | Email verified; upload your student ID. |
+| Pending review | A reviewer will check it (1–2 working days); replace it if it's wrong or unclear. |
+| Verified | Student features unlocked until the validity date; a reminder appears 30 days before it ends. |
+| Rejected — additional information required | The reason (unreadable, name mismatch, expired…) and the reviewer's note; upload a new document. |
+| Expired — re-verification required | The validity date passed or the policy changed; student features pause at once. |
+
+**Validity** = the document's expiry date (or the reviewer's date), capped at **12 months**, so everyone re-verifies at least once a year. If the university email was confirmed more than a year ago it must be confirmed again. Raising `STUDENT_POLICY_VERSION` makes every student re-verify. A student re-verifying early keeps access until their current date. If the validity ends before a booked flight, the student is warned, and student features are refused **for that flight** until they re-verify.
+
+### Automated checks (flag only, never reject)
+
+Every upload is checked automatically; the results are shown to the reviewer, and the ones the student can fix are shown to them too:
+
+- **File:** real JPG/PNG/PDF (checked from the file's bytes, not its name), ≤ 5 MB; password-protected PDFs and PDFs with scripts or attachments are refused with an explanation. Images whose shorter side is under 600 px are flagged as possibly unreadable.
+- **Same person:** the name typed for the document is compared with the account name (order, accents and middle names ignored). The university email is verified on the same account.
+- **Institution:** the email domain is checked against a list of recognised institutions. Unlisted `.edu` domains go to a reviewer; they are not rejected. The institution typed for the document must match the email's.
+- **Validity:** the expiry date is read **from the text of digital PDFs** (only dates next to words like "valid until", "expiry" or "programme end", so a date of birth is never taken for one). Otherwise the date the student typed is used. Expired documents, documents that expire before a booked flight, and typed dates that differ from the document are flagged.
+- **Reuse:** the same file as a rejected one, or the same file used by another account.
+
+**Automated checks never reject a student. Only a reviewer can.** With `STUDENT_AUTO_APPROVE=pdf-text`, a digital PDF with no flags, whose text contains the account name, a recognised institution and a future expiry date, is approved without a reviewer. This is off by default, because a PDF is easy to fake without a provider that checks authenticity.
+
+### Reviewer console (`#/review`)
+
+For accounts listed in `VERIFIERS` (`.env`). It shows the queue with the student's typed details, the automated checks, booked flight dates and a suggested validity date. Documents open from memory (never cached). The reviewer approves (validity date, max 12 months) or rejects with a reason and an optional note. Reviewers can't review their own submission, and a decision made on a document the student has since replaced is refused.
+
+### Security and privacy
+
+- **Server-enforced:** the browser's copy of "verified" is display-only. `/api/me/data` ignores a `verified` value sent by a device, and only a currently verified student can add student-only perks (welcome bonus, rewards paid with student points, adapter). Student seating (`live.js`) and the student chat (`chat-server.js`) check the server record **for the flight date**, and the student's university comes from the verified email, not the request.
+- **Private storage:** documents are stored in `data/vault/` (git-ignored, never served by `server.js`) under random ids, **encrypted with AES-256-GCM** using a per-file key wrapped by `DOC_ENCRYPTION_KEY` (envelope encryption).
+- **Access:** only reviewers can download a document (`no-store`, sandboxed CSP). Other passengers and students never see documents, ID numbers or verification details; they only see the existing ★ / tick.
+- **Access log:** every submission, view, decision and deletion is logged (`db.verifyAudit`: who, what, when, IP; no document contents) and kept for 365 days.
+- **Retention:** a document is **deleted as soon as a decision is made** (deleted on replace or remove too). Unreviewed documents are deleted after 30 days and the student is asked to upload again. Afterwards only the outcome, institution, validity date and a SHA-256 of the file remain. Text read from PDFs is used once and not stored. Students can remove their verification entirely (*Settings → Remove my student verification*).
+- **Minimal data:** no passports or other identity documents are asked for, and ID numbers aren't needed or stored.
+- Accounts verified with the old email-only flow are moved to *Awaiting document upload*.
+
+### Implemented in the prototype vs. needs a provider or trained people
+
+| Implemented here | Needs a real document-verification provider and/or trained reviewers |
+|---|---|
+| Email OTP; upload with type/size/content checks; encrypted private storage; status workflow; reviewer console; access log; deletion and retention; expiry, eligibility and policy-version enforcement in chat, seating and perks | **OCR of photos** (reading the name, institution and expiry date from images; the prototype reads digital PDFs only) |
+| Name / institution matching against what the student typed, and against PDF text | **Authenticity checks**: tamper/forgery detection, template matching per university, detecting screenshots of screenshots |
+| Low-resolution and duplicate-file flags | **Blur / glare / cropping detection** in images; **face match** between the card photo and a selfie (liveness) |
+| Recognised-institution list (sample) | The airline's **official eligible-institution list**, kept up to date against official registers |
+| Reviewer decisions with reasons | **Trained verification staff**, service levels, appeals, fraud escalation, quality sampling |
+| Demo encryption key on disk | **Production storage**: private S3 bucket with SSE-KMS, short-lived presigned URLs for reviewers, lifecycle deletion, KMS key rotation, CloudTrail access logs, region chosen for PDPO cross-border rules |
+| | Legal review of retention periods and the privacy notice (PDPO, GDPR for EU students) |
+
+The AWS Lambda edition (`aws/lambda/verify.js`) still covers step 1 (email) only; step 2 runs on the Node server.
+
+**Demo:** set `VERIFIERS=you@example.com` in `.env`, `npm start`, create that reviewer account in one browser and a student account in another. Verify the student's email, upload any card photo, then approve or reject it under *Settings → Student verification queue*.
 
 ### Sending real email with Amazon SES (SMTP)
 
@@ -119,7 +181,7 @@ A group chat per flight for verified students, run by our server (`chat-server.j
 
 **Implemented in the prototype**
 
-- **Who:** signed-in account + student status recorded by the server when the university-email code was confirmed + aged 18+ on the departure date + an active booking on that flight + not removed for conduct.
+- **Who:** signed-in account + verified student status on the server (university email + approved student ID, valid on the departure date) + aged 18+ on the departure date + an active booking on that flight + not removed for conduct.
 - **When:** opens 7 days before departure; messages deleted 48 h after arrival (scheduled arrival here; use the actual arrival from a flight-status feed in production).
 - **Group only:** one room per flight, no private or one-to-one messages. Joining is voluntary (guidelines must be accepted) and students can leave at any time.
 - **Data minimisation:** others see a first name, a verified tick and, only if the student opted in when booking, a university. Never a surname, email, booking, seat or seating preference.
@@ -137,7 +199,8 @@ A group chat per flight for verified students, run by our server (`chat-server.j
 - **The two-strike rule:** cancellation without refund for chat conduct may be challenged as unfair under consumer law and the conditions of carriage.
 - **The 180 / 30-day evidence periods.**
 - **Cross-border data:** the server runs in Sydney (`ap-southeast-2`), not in Hong Kong.
-- **What university-email verification proves:** access to a mailbox, not identity or enrolment.
+- **What verification proves:** a university email shows access to a mailbox; the student ID check (by a reviewer) adds current enrolment, but not identity to the standard of a passport check.
+- **Handling student ID images:** retention, reviewer access and the privacy notice for documents.
 - **Moderators reading reported content.**
 - **Retaliation protections.**
 
@@ -191,7 +254,8 @@ data.js       airports, cabins, fares (Light / Essential / Flex), simulated flig
 student-zone.js  cabin layouts, student seat planner (incl. private exclusions), perks data
 app.js        router, views, booking / check-in / seat map / perks / verification UI
 config.js     apiBase for the verification backend
-server.js     Express: POST /api/verify/start, /api/verify/confirm, GET /api/health (local / any Node host)
+server.js     Express: POST /api/verify/start, /api/verify/confirm (step 1, email), GET /api/health (local / any Node host)
+student-verify.js  step 2 (student ID): upload, encrypted storage, status workflow, reviewer API, retention (/api/student, /api/review)
 accounts.js   sign-up / sign-in / sessions / per-user data / referrals (/api/auth, /api/me)
 db.js         JSON-file database shared by accounts.js and live.js
 chat-server.js student flight chat: eligibility, reports, moderation, two-strike rule, retention (/api/chat, /api/mod)

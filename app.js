@@ -100,7 +100,8 @@
   let trips = [];
   let tripsTab = 'upcoming';
   const retrieved = new Set();
-  const vs = { step: 'email', email: '', demo: false, demoCode: '', msg: '', busy: false, localCode: null, localExpires: 0 };
+  const vs = { step: 'email', email: '', demo: false, demoCode: '', msg: '', busy: false, localCode: null, localExpires: 0, files: {}, form: {}, replace: false };
+  let sv = null; /* the server's verification status for this account (student-verify.js view) */
   const search = { type: 'return', from: 'HKG', to: '', depart: shiftDate(todayStr(), 14), ret: shiftDate(todayStr(), 21), cabin: 'Economy', pax: 1, step: 'out', out: null, back: null };
   const SZ = window.AURELIA_SZ;
   const seatSel = { key: '', seat: '' };
@@ -116,6 +117,7 @@
       prefs: { ...DEFAULT_PREFS, ...(store.get('prefs', null) || {}) },
       verified: store.get('verified', null),
     } : null;
+    if (user && user.verified && user.verified.until && user.verified.until < todayStr()) user.verified = null; // ended: student features pause at once
     if (user) user.tier = user.verified ? 'Student' : 'Member';
   }
 
@@ -137,7 +139,8 @@
     store.set('session', token);
     store.set('account', acct);
     activeId = acct.id; refsCache = null; fetchRefs.at = 0;
-    Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null });
+    Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null, files: {}, form: {}, replace: false });
+    sv = null;
     if (data) for (const k of SYNCED) store.set(k, k in data ? data[k] : null, true);
     loadState();
   }
@@ -189,7 +192,8 @@
     if (signup) store.set('invite', '');
     toast(signup ? `Welcome, ${r.user.firstName}! Your member number is ${r.user.memberId}.` : `Signed in as ${r.user.firstName}`);
     location.hash = '#/home'; render();
-    if (!user.verified) setTimeout(studentPromo, 600); // guide new and returning members towards student verification
+    fetchVerification(true);
+    if (!user.verified && !(user.student && user.student.status && user.student.status !== 'not_submitted')) setTimeout(studentPromo, 600); // guide new and returning members towards student verification
   }
   function signOutLocal(msg) {
     if (session() && !isLocalAccount()) authCall('POST', '/auth/logout', {});
@@ -264,7 +268,8 @@
   }
 
   /* ---------- student seating ---------- */
-  const studentOk = (iso) => Boolean(user && user.verified && SZ.isAdult(user.dob, iso));
+  const coversDate = (iso) => Boolean(user && user.verified && (!user.verified.until || String(iso).slice(0, 10) <= user.verified.until));
+  const studentOk = (iso) => Boolean(coversDate(iso) && SZ.isAdult(user.dob, iso));
   const studentEligible = (t) => t.cabin === 'Economy' && studentOk(t.segments[0].dep);
   /* Fares: Economy Light / Essential / Flex; premium cabins have one fare with seat selection included. */
   const withFare = (f, fare) => (fare && FARES[fare] ? { ...f, fare, price: Math.round(f.price * FARES[fare].mult) } : { ...f, fare: null });
@@ -359,7 +364,7 @@
         const k = JSON.stringify(body);
         if (LIVE.sent[id] === k) return;
         LIVE.sent[id] = k;
-        liveCall('/flights/' + id + '/pax', body).then((r) => { if (r.ok) liveWatch(id); else delete LIVE.sent[id]; });
+        liveCall('/flights/' + id + '/pax', body).then((r) => { if (r.ok) liveWatch(id); else delete LIVE.sent[id]; if (r.studentDenied) toast(r.studentDenied); });
       });
     }, 120);
   }
@@ -458,15 +463,20 @@
   /* Shown in the booking form and on the trip page when the user isn't a verified adult student. */
   function studentGate(iso) {
     if (!user) return '';
-    if (!user.verified) return `<a class="banner" href="#/verify" data-action="go-verify">${icon('cap')}<span><b>Fly next to other students</b><br><span class="muted sm">Verify your student status and we'll seat you next to another student.</span></span>${icon('arrow')}</a>`;
+    if (!user.verified) {
+      const st = vStatus();
+      const msg = { pending_review: ["Your student ID is being reviewed", 'Student seating unlocks as soon as it is approved.'], rejected: ['We need more information', 'Check your student verification to unlock student seating.'], expired: ['Student verification expired', 'Re-verify to use student seating again.'], awaiting_document: ['Almost there: upload your student ID', 'Finish verifying and we\'ll seat you next to another student.'] }[st] || ['Fly next to other students', "Verify your student status and we'll seat you next to another student."];
+      return `<a class="banner" href="#/verify" data-action="go-verify">${icon('cap')}<span><b>${msg[0]}</b><br><span class="muted sm">${msg[1]}</span></span>${icon('arrow')}</a>`;
+    }
+    if (!coversDate(iso)) return `<a class="banner" href="#/verify" data-action="go-verify">${icon('alert')}<span><b>Your student verification ends on ${esc(fmtDate(user.verified.until + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' }))}</b><br><span class="muted sm">That's before this flight. Re-verify with a document valid on the day you fly to use student features.</span></span>${icon('arrow')}</a>`;
     if (!SZ.isAdult(user.dob, iso)) return `<div class="card empty sm">Student seating is open to verified students aged 18+.</div>`;
     return '';
   }
 
   function studentCard(t) {
     if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
+    if (!studentEligible(t)) return studentGate(t.segments[0].dep); // the seating planner is a student feature
     const planner = plannerAllowed(t, 0) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See student seating on this flight</a>` : '';
-    if (!studentEligible(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
     const seated = studentTrip(t) && t.checkedIn ? t.segments.map((s, i) => {
       const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
       return nb.length ? `<p class="sm" style="margin:0">${esc(s.number)} · seat ${esc(s.seat)}, next to ${nearText(nb)}</p>` : '';
@@ -762,7 +772,20 @@
       <a class="link" href="#/rewards">Points &amp; rewards${icon('ext')}</a></section>`;
   }
   /* Gentle, dismissible guide towards student verification. */
-  const studentBanner = () => `<a class="banner student-banner" href="#/discover">${icon('cap')}<span><b>University student?</b><br><span class="muted sm">Verify with your university email to unlock student seating, student points and perks.</span></span>${icon('arrow')}</a>`;
+  const studentBanner = () => `<a class="banner student-banner" href="#/discover">${icon('cap')}<span><b>University student?</b><br><span class="muted sm">Verify with your university email and student ID to unlock student seating, student points and perks.</span></span>${icon('arrow')}</a>`;
+  /* Where the member is in student verification, with the next step (home pages). '' when there's nothing to do. */
+  function verifyNotice() {
+    if (!user) return '';
+    const st = vStatus(), v = user.verified;
+    const b = (ic, title, text, tone = '') => `<a class="banner vf-banner ${tone}" href="#/verify" data-action="go-verify">${icon(ic)}<span><b>${title}</b><br><span class="muted sm">${text}</span></span>${vBadge(st)}${icon('arrow')}</a>`;
+    if (v && sv && sv.expiresSoon) return b('alert', `Your student verification ends on ${esc(fmtDay(v.until))}`, 'Re-verify now to keep student seating, chat and perks.', 'warn');
+    if (v && sv && (sv.flightsNotCovered || []).length) return b('alert', 'Your verification ends before a booked flight', `Re-verify with a document valid on ${esc(fmtDay(sv.flightsNotCovered[0]))} to use student features on that trip.`, 'warn');
+    if (v) return '';
+    return { awaiting_document: b('ticket', 'Almost there: upload your student ID', 'Your university email is verified. Add your student ID to unlock student features.', 'warn'),
+      pending_review: b('clock', 'Your student ID is being reviewed', "Usually within 1–2 working days. We'll show the result here.", 'warn'),
+      rejected: b('alert', 'We need more information', "We couldn't confirm your student status. See why and upload a new document.", 'bad'),
+      expired: b('alert', 'Student verification expired', 'Student features are paused. Re-verify with a current student ID or enrolment letter.', 'bad') }[st] || '';
+  }
   function memberHome() {
     const next = upcoming()[0];
     const h = new Date().getHours();
@@ -770,7 +793,7 @@
     return `<div class="home ${next ? '' : 'noflight'}">
       <header class="pagehead"><div><p class="crumb">Overview</p><h1><span class="g">${greet},</span> <span class="n">${esc(user.firstName)}</span></h1>
         <p class="sub">Your trips and Asia Miles in one place.</p></div></header>
-      ${studentBanner()}
+      ${verifyNotice() || studentBanner()}
       <div class="g2">${milesCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
       ${quickBookCard()}
       <div class="sect-head" style="margin-top:20px"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(activity()[0])}
@@ -784,14 +807,14 @@
         <div class="modal promo" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="promoTitle">
           <div class="promo-hero"><span class="promo-badge">${icon('cap')} Cathay Student</span>
             <h2 id="promoTitle">Studying at university?</h2>
-            <p>Verify your university email and your membership becomes a student membership. Free, in under a minute.</p></div>
+            <p>Verify your university email and student ID and your membership becomes a student membership. Free, in a few minutes.</p></div>
           <ul class="promo-list">
             <li>${icon('seat')}<span><b>Fly next to students</b> from your university, seated automatically</span></li>
             <li>${icon('gift')}<span><b>${PERKS.welcome.toLocaleString()} welcome points</b>, enough to choose your seat on Economy Light</span></li>
             <li>${icon('up')}<span><b>1.5 student points</b> per mile on every trip home, 70% become Asia Miles when you graduate</span></li>
             <li>${icon('plug')}<span><b>Free plug adapter</b> on your first flight to your university's country</span></li>
           </ul>
-          <a class="btn btn-primary block" href="#/verify" data-action="modal-close">Verify my student email</a>
+          <a class="btn btn-primary block" href="#/verify" data-action="modal-close">Verify my student status</a>
           <a class="btn btn-ghost block" href="#/discover" data-action="modal-close">Discover student benefits</a>
           <button class="link-btn block-link" data-action="modal-close">Not now</button>
         </div>
@@ -802,7 +825,7 @@
   views.discover = () => `
     <div class="narrow wide">
       <header class="pagehead"><div><p class="crumb">Cathay Student</p><h1>One membership from your first flight to your first job</h1>
-        <p class="sub">For university students aged 18+, verified with a university email. Benefits are linked to your membership, not to promo codes.</p></div></header>
+        <p class="sub">For university students aged 18+, verified with a university email and a student ID. Benefits are linked to your membership, not to promo codes, and stay active while your student status is valid.</p></div></header>
       <div class="disc-grid">
         ${[
           ['seat', 'Student seating', 'Say yes once: at check-in you sit next to other students, from your university when possible. Names are never shown; universities only if a student chooses.'],
@@ -815,7 +838,7 @@
           ['tag', 'Student card (proposed)', 'A student card with our card partner: no income requirement, earns student points on everyday spending, upgrades at graduation. Concept only, not available.'],
         ].map(([ic, h, p]) => `<div class="card disc">${icon(ic)}<h3>${h}</h3><p class="muted sm">${p}</p></div>`).join('')}
       </div>
-      <div class="row gap-sm">${user ? (user.verified ? `<a class="btn btn-primary" href="#/rewards">See my student perks</a>` : `<a class="btn btn-primary" href="#/verify">Verify my student email</a>`) : `<a class="btn btn-primary" href="#/signup">Create an account</a>`}
+      <div class="row gap-sm">${user ? (user.verified ? `<a class="btn btn-primary" href="#/rewards">See my student perks</a>` : `<a class="btn btn-primary" href="#/verify">Verify my student status</a>`) : `<a class="btn btn-primary" href="#/signup">Create an account</a>`}
         <a class="btn btn-ghost" href="#/chat-safety">Chat safety &amp; privacy</a><a class="btn btn-ghost" href="#/parents">For parents</a></div>
     </div>`;
 
@@ -837,6 +860,7 @@
         </div>
         <div class="head-actions d-only"><a class="circle" href="#/home" aria-label="Overview">${icon('home')}</a><a class="pillbtn" href="#/profile" aria-label="Account settings">${ini} ${icon('ext')}</a></div>
       </header>
+      ${verifyNotice()}
       <div class="g2">${pointsCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
       ${quickBookCard()}
       <div class="sect d-only"><h2>Made for your next journey</h2><p class="sub">Student-only tools, ready when you are.</p></div>
@@ -897,8 +921,8 @@
       <button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})">
         <span>From Hong Kong</span><b>${esc(city(c))}</b><span>Fares from ${money(basePrice('HKG', c))}</span></button>`).join('');
     const verify = !user ? '' : user.verified
-      ? `<div class="banner">${tick()}<span><b>Student status verified</b><br><span class="muted sm">Verified with ${esc(user.verified.email)}.</span></span></div>`
-      : `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your .edu email to unlock student offers and earn a green tick.</span></span>${icon('arrow')}</a>`;
+      ? `<div class="banner">${tick()}<span><b>Student status verified</b><br><span class="muted sm">Verified with ${esc(user.verified.email)}${user.verified.until ? ' · valid until ' + esc(fmtDay(user.verified.until)) : ''}.</span></span></div>`
+      : verifyNotice() || `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your university email and student ID to unlock student offers and earn a green tick.</span></span>${icon('arrow')}</a>`;
     return `<div class="narrow wide">
       <header class="pagehead"><div><p class="crumb">${isStudent() ? 'Student offers' : 'Offers'}</p><h1>${isStudent() ? 'Student offers' : 'Offers'}</h1>
         <p class="sub">${isStudent() ? 'Fares and perks picked for students flying from Hong Kong.' : 'Fares from Hong Kong.'}</p></div></header>
@@ -1176,7 +1200,7 @@
   views.planner = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx || 0), s = t && t.segments[i];
     if (!t || !s) return notFound();
-    if (!plannerAllowed(t, i)) return redirect('#/trip/' + ref);
+    if (!plannerAllowed(t, i) || !studentEligible(t)) return redirect('#/trip/' + ref);
     const p = seatPlan(t, i), c = p.cabin;
     seatCtx = { t, i, p, c };
     if (planner.key !== SZ.flightKey(s)) Object.assign(planner, { key: SZ.flightKey(s), log: [], moved: new Set() });
@@ -1245,18 +1269,23 @@
         <div class="sum-row"><span>Email</span><b>${esc(user.email)}</b></div>
         <div class="sum-row"><span>Date of birth</span><b>${esc(user.dob)}</b></div>
         <div class="sum-row"><span>Member since</span><b>${esc(user.memberSince)}</b></div>
-        <div class="sum-row"><span>Student status</span><b>${user.verified ? tick() + ' Verified' : 'Not verified'}</b></div>
+        <div class="sum-row"><span>Student status</span>${vBadge()}</div>
       </div>
       <div class="card">
         <h3>Student verification</h3>
         ${user.verified
-          ? `<p class="muted" style="margin-top:0">${tick()} Verified with <b>${esc(user.verified.email)}</b>.</p>
+          ? `<p class="muted" style="margin-top:0">${tick()} Verified with <b>${esc(user.verified.email)}</b>${user.verified.until ? `, valid until <b>${esc(fmtDay(user.verified.until))}</b>` : ''}.</p>
+             ${verifyNotice()}
              <a class="btn btn-primary block" href="#/rewards">${icon('gift')} Student perks</a>
-             <button class="btn btn-ghost block sm-btn" data-action="unverify" style="margin-top:8px">Remove verification (demo)</button>`
-          : `<p class="muted" style="margin-top:0">Confirm a university email (.edu) to get a green tick next to your name.</p>
-             <a class="btn btn-primary block" href="#/verify">Verify student status</a>`}
+             <button class="btn btn-ghost block sm-btn" data-action="unverify" style="margin-top:8px">Remove my student verification</button>`
+          : vStatus() === 'not_submitted'
+            ? `<p class="muted" style="margin-top:0">Confirm your university email (.edu) and upload your student ID to get a green tick next to your name.</p>
+               <a class="btn btn-primary block" href="#/verify">Verify student status</a>`
+            : `<div class="row between"><span class="muted sm">${esc((sv && sv.explanation) || '')}</span></div>${verifyNotice()}
+               <a class="btn btn-primary block" href="#/verify">${vStatus() === 'pending_review' ? 'See verification' : 'Continue verification'}</a>`}
       </div>
       ${user.moderator ? `<a class="btn btn-ghost block" href="#/moderation">${icon('info')} Chat reports (moderator)</a>` : ''}
+      ${user.reviewer ? `<a class="btn btn-ghost block" href="#/review">${icon('shield')} Student verification queue (verification team)</a>` : ''}
       <form id="prefsForm" class="card form">
         <h3>Travel preferences</h3>
         <div class="two">
@@ -1273,42 +1302,220 @@
     </div>`;
   };
 
-  views.verify = () => {
-    const back = vs.returnTo ? backLink(vs.returnTo, 'Back') : backLink('#/profile', 'Settings');
-    const done = user.verified || vs.step === 'done';
-    if (done) {
-      const v = user.verified;
-      return `<div class="narrow">${back}
-        <div class="card verify-done">${tick('tick-xl')}<h1>You're verified</h1>
-          <p class="muted">${esc(user.firstName)} ${esc(user.lastName)} now has a green tick next to their name.${v ? '<br>Verified with <b>' + esc(v.email) + '</b>.' : ''}</p>
-          <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">${vs.returnTo ? 'Continue' : 'Back to home'}</a></div></div>`;
+  /* ---------- student verification journey: 1 university email → 2 student ID → 3 review → 4 verified ----------
+   * The server (student-verify.js) owns the status; this page only shows it and collects the upload. */
+  const V_LABEL = { not_submitted: 'Not submitted', awaiting_document: 'Awaiting document upload', pending_review: 'Pending review', verified: 'Verified', rejected: 'Rejected — additional information required', expired: 'Expired — re-verification required' };
+  const V_TONE = { not_submitted: 'muted', awaiting_document: 'warn', pending_review: 'warn', verified: 'ok', rejected: 'bad', expired: 'bad' };
+  const vStatus = () => (!user ? 'not_submitted' : !liveAccount() ? (user.verified ? 'verified' : 'not_submitted') : (sv && sv.status) || (user.student && user.student.status) || 'not_submitted');
+  const vBadge = (st = vStatus()) => `<span class="badge ${V_TONE[st]}">${esc(V_LABEL[st])}</span>`;
+  const fmtDay = (d) => (d ? fmtDate(d + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+  const ACCEPT = { 'image/jpeg': 'JPG', 'image/png': 'PNG', 'application/pdf': 'PDF' };
+
+  function vStepper(cur) {
+    const steps = ['University email', 'Student ID', 'Review', 'Verified'];
+    return `<ol class="vf-steps" aria-label="Verification progress">${steps.map((s, i) => `<li class="${i + 1 < cur ? 'done' : i + 1 === cur ? 'on' : ''}"${i + 1 === cur ? ' aria-current="step"' : ''}><span class="n">${i + 1 < cur ? icon('check') : i + 1}</span><span class="t">${s}</span></li>`).join('')}</ol>`;
+  }
+  /* A file picked for upload: kept in memory (never in localStorage) until it is sent. */
+  function vPick(slot, file) {
+    const old = vs.files[slot];
+    if (old && old.url) URL.revokeObjectURL(old.url);
+    delete vs.files[slot]; vs.msg = '';
+    if (!file) return render();
+    const type = file.type || ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', pdf: 'application/pdf' }[String(file.name).split('.').pop().toLowerCase()] || '');
+    if (!ACCEPT[type]) { vs.msg = `“${file.name}” isn't a JPG, PNG or PDF. ${/hei[cf]/i.test(file.name) ? 'On iPhone, take a screenshot of the photo or choose “Most Compatible” in camera settings.' : 'Choose a photo, screenshot or PDF.'}`; return render(); }
+    if (file.size > 5 * 1048576) { vs.msg = `That file is ${kb(file.size)}. The limit is 5 MB: take a new photo or save it at a smaller size.`; return render(); }
+    const f = vs.files[slot] = { file, type, url: URL.createObjectURL(file), warn: '' };
+    if (type !== 'application/pdf') {
+      const img = new Image();
+      img.onload = () => { if (Math.min(img.naturalWidth, img.naturalHeight) < 600) { f.warn = 'This image is quite small and may be hard to read. If you can, take a closer photo in good light.'; render(); } };
+      img.src = f.url;
     }
+    render();
+  }
+  function vDrop(slot, title, hint) {
+    const f = vs.files[slot];
+    if (f) {
+      const pv = f.type === 'application/pdf'
+        ? `<object class="vf-pdf" data="${f.url}#toolbar=0" type="application/pdf" aria-label="PDF preview"><p class="muted sm">${icon('ticket')} PDF ready to send. Preview isn't available in this browser.</p></object>`
+        : `<img class="vf-img" src="${f.url}" alt="Preview of your ${esc(title.toLowerCase())}">`;
+      return `<div class="vf-file"><div class="vf-prev">${pv}</div>
+        <div class="row between vf-meta"><span class="sm"><b>${esc(f.file.name)}</b><br><span class="muted">${ACCEPT[f.type]} · ${kb(f.file.size)}</span></span>
+          <span class="row gap-sm"><label class="btn btn-ghost sm-btn">Replace<input type="file" class="vf-input" data-slot="${slot}" accept="image/jpeg,image/png,application/pdf" hidden></label>
+          <button type="button" class="btn btn-ghost sm-btn" data-action="vf-remove" data-slot="${slot}">Remove</button></span></div>
+        ${f.warn ? `<p class="vf-warn sm">${icon('alert')} ${esc(f.warn)}</p>` : ''}</div>`;
+    }
+    return `<div class="vf-drop" data-slot="${slot}">
+      ${icon(slot === 'id' ? 'ticket' : 'info', 'big')}<b>${esc(title)}</b><span class="muted sm">${hint}</span>
+      <div class="row gap-sm vf-btns"><label class="btn btn-primary sm-btn">Choose file<input type="file" class="vf-input" data-slot="${slot}" accept="image/jpeg,image/png,application/pdf" hidden></label>
+      <label class="btn btn-ghost sm-btn">${icon('sparkle')} Take a photo<input type="file" class="vf-input" data-slot="${slot}" accept="image/*" capture="environment" hidden></label></div>
+      <span class="muted xs">JPG, PNG or PDF · up to 5 MB</span></div>`;
+  }
+  function vDocStep(head) {
+    const fm = vs.form, noExp = fm.noExpiry;
+    return `${head}
+      <section class="card vf-why"><h3>${icon('shield')} Why we ask for your student ID</h3>
+        <p class="muted sm">Your university email shows you can use a university mailbox. Your student ID shows that this account belongs to a <b>currently enrolled</b> student, on the dates you fly. We use it only to check eligibility and <b>delete it as soon as it has been checked</b>: we keep just the result and the date your student status is valid until.</p></section>
+      <form id="verifyDocForm" class="card form" novalidate>
+        <h3>Upload your student ID</h3>
+        <div class="vf-need"><p class="sm"><b>Make sure we can read:</b></p>
+          <ul class="vf-list sm">
+            <li>${icon('check')}<span>Your <b>full name</b></span></li><li>${icon('check')}<span>Your <b>university or institution</b></span></li>
+            <li>${icon('check')}<span>The <b>expiry or “valid until” date</b>, if your card has one</span></li><li>${icon('check')}<span>Your <b>photo</b>, if your card has one</span></li>
+          </ul>
+          <p class="muted xs">The whole card, in focus, without glare. A screenshot of a digital student ID is fine. You can cover your student ID number: we don't need it. Please don't upload a passport or other ID.</p></div>
+        ${vDrop('id', 'Student ID', 'Front of your card, or a screenshot from your university app')}
+        <div class="two">
+          <label class="field"><span>Full name as shown</span><input name="fullName" class="vf-in" value="${esc(fm.fullName)}" autocomplete="name" required></label>
+          <label class="field"><span>University or institution</span><input name="institution" class="vf-in" value="${esc(fm.institution)}" required></label>
+        </div>
+        <label class="field"><span>Expiry or “valid until” date</span><input type="date" name="expiry" class="vf-in" value="${esc(fm.expiry)}" ${noExp ? 'disabled' : ''}></label>
+        <label class="check sm"><input type="checkbox" name="noExpiry" class="vf-in" ${noExp ? 'checked' : ''}> My card doesn't show an expiry date</label>
+        ${noExp ? `<div class="vf-alt"><p class="sm" style="margin:0 0 8px"><b>No expiry date? No problem.</b> Add proof that you're enrolled this academic year: an <b>enrolment letter</b> or an <b>official digital student-status record</b> (e.g. a certificate from your student portal). It's optional, but it speeds up the review. Without it, our team checks your card and sets your student status until the end of the academic year.</p>
+          ${vDrop('proof', 'Proof of current enrolment (optional)', 'Enrolment letter or official student-status record, issued this academic year')}</div>` : ''}
+        ${vs.msg ? `<p class="err" role="alert">${esc(vs.msg)}</p>` : ''}
+        <p class="muted sm vf-review-note">${icon('clock')} Most documents need a quick check by our verification team, usually within 1–2 working days. We'll show the result here.</p>
+        <button class="btn btn-primary block" type="submit" ${vs.busy ? 'disabled' : ''}>${vs.busy ? 'Uploading securely…' : 'Submit for verification'}</button>
+      </form>
+      <p class="muted xs">Your document is encrypted and stored privately. Only Cathay's trained verification team can open it; other passengers and students never see it. Every access is logged.</p>`;
+  }
+  function vEmailStep(back, cur, note = '') {
     const err = vs.msg ? `<p class="err" role="alert">${esc(vs.msg)}</p>` : '';
     if (vs.step === 'code') {
-      return `<div class="narrow">${back}
+      return `<div class="narrow vf-page">${back}${vStepper(cur)}
         <h1>Enter your code</h1>
         <p class="muted">We sent a 6-digit code to <b>${esc(vs.email)}</b>. It expires in 10 minutes.</p>
         ${vs.demo ? `<div class="card demo-note"><b>Demo mode:</b> no email server is connected, so your code is shown here.<div class="demo-code mono">${esc(vs.demoCode)}</div></div>` : ''}
         <form id="verifyCodeForm" class="card form" autocomplete="off">
           <label class="field"><span>6-digit code</span><input name="code" class="code-input mono" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required autofocus></label>
           ${err}
-          <button class="btn btn-primary block" type="submit">Verify</button>
+          <button class="btn btn-primary block" type="submit">Verify email</button>
           <div class="two"><button class="btn btn-ghost" type="button" data-action="verify-resend">Resend code</button>
           <button class="btn btn-ghost" type="button" data-action="verify-change">Change email</button></div>
         </form></div>`;
     }
-    return `<div class="narrow">${back}
+    return `<div class="narrow vf-page">${back}${vStepper(cur)}
       <h1>Verify student status</h1>
+      ${note}
       ${user.invitedBy ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(user.invitedBy)}). Verify and you'll both get ${PERKS.referralMiles.toLocaleString()} miles after your first flight.</span></div>` : ''}
-      <p class="muted">Enter your university email. We'll send a 6-digit code — any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
+      <p class="muted">Two quick steps: confirm your <b>university email</b> with a one-time code, then upload your <b>student ID</b>. Any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
       <form id="verifyEmailForm" class="card form" novalidate>
-        <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email)}" required autocomplete="email"></label>
+        <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email || (sv && sv.email) || '')}" required autocomplete="email"></label>
         ${err}
         <button class="btn btn-primary block" type="submit">Send code</button>
       </form>
-      <p class="muted sm">Student verification is a demo feature. Your address is used only to send the code.</p>
+      <p class="muted sm">Your address is used only to send the code and to check that you study at that institution.</p>
     </div>`;
+  }
+  /* The status box shown at the top of the journey: what it means and what to do next. */
+  const vStatusBox = (v, extra = '') => `<div class="card vf-status ${V_TONE[v.status]}"><div class="row between"><b>Status</b>${vBadge(v.status)}</div>
+    <p class="sm" style="margin:8px 0 4px">${esc(v.explanation || '')}</p>
+    ${(v.nextSteps || []).length ? `<ul class="vf-next sm">${v.nextSteps.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>` : ''}${extra}</div>`;
+
+  views.verify = () => {
+    const back = vs.returnTo ? backLink(vs.returnTo, 'Back') : backLink('#/profile', 'Settings');
+    if (!liveAccount()) return vOffline(back);
+    if (!sv) { fetchVerification(true); return `<div class="narrow vf-page">${back}<div class="card empty">Loading your verification status…</div></div>`; }
+    const st = sv.status;
+    if (st === 'not_submitted' || vs.step === 'code' || (sv.needsEmail && vs.step !== 'doc')) {
+      const note = sv.needsEmail ? `<div class="card vf-status warn sm">${icon('info')} Your university email was last confirmed over a year ago. Confirm it again, then upload a current document.</div>` : '';
+      return vEmailStep(back, 1, note);
+    }
+    const head = `<div class="narrow vf-page">${back}${vStepper(2)}<h1>${st === 'expired' ? 'Re-verify your student status' : 'Upload your student ID'}</h1>
+      <p class="muted">${icon('check')} University email verified: <b>${esc(sv.email)}</b>${sv.institution ? ` · ${esc(sv.institution.name)}` : ''}</p>`;
+    if (st === 'pending_review' && !vs.replace) {
+      const s = sv.submission || { documents: [], notices: [] };
+      return `<div class="narrow vf-page">${back}${vStepper(3)}<h1>We're checking your document</h1>
+        ${vStatusBox(sv)}
+        <div class="card"><h3>What you sent</h3>
+          ${s.documents.map((d) => `<div class="sum-row"><span>${d.role === 'student_id' ? 'Student ID' : 'Proof of enrolment'}</span><b class="sm">${esc(d.name)} · ${ACCEPT[d.mime] || ''} · ${kb(d.bytes)}</b></div>`).join('')}
+          <div class="sum-row"><span>Name on document</span><b>${esc(s.declared && s.declared.fullName)}</b></div>
+          <div class="sum-row"><span>Valid until</span><b>${s.declared && s.declared.expiry ? fmtDay(s.declared.expiry) : 'No expiry date on card'}</b></div>
+          <div class="sum-row"><span>Sent</span><b>${s.submittedAt ? fmtDate(s.submittedAt) : ''}</b></div>
+          ${s.notices.length ? `<div class="vf-warn sm">${icon('alert')} <span><b>Our team will look closely at:</b> ${s.notices.map(esc).join(' · ')}. If you sent the wrong file or a blurry photo, replace it now to avoid a delay.</span></div>` : ''}
+          <div class="two" style="margin-top:12px"><button class="btn btn-ghost" data-action="vf-replace">Replace document</button><button class="btn btn-ghost" data-action="vf-withdraw">Remove document</button></div></div>
+        <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">Done</a></div>`;
+    }
+    if (st === 'verified' && !vs.replace) {
+      const notCovered = sv.flightsNotCovered || [];
+      return `<div class="narrow vf-page">${back}${vStepper(5)}
+        <div class="card verify-done">${tick('tick-xl')}<h1>You're a verified student</h1>
+          <p class="muted">${esc(user.firstName)} ${esc(user.lastName)} · ${esc(sv.institution ? sv.institution.name : '')}<br>Student features are unlocked until <b>${fmtDay(sv.validUntil)}</b>.</p>
+          ${sv.expiresSoon ? `<p class="vf-warn sm">${icon('alert')} Your verification ends in ${sv.daysLeft} day${sv.daysLeft === 1 ? '' : 's'}. Re-verify now to keep student seating, chat and perks.</p>` : ''}
+          ${notCovered.length ? `<p class="vf-warn sm">${icon('alert')} Your verification ends before your flight${notCovered.length > 1 ? 's' : ''} on ${notCovered.map(fmtDay).join(', ')}. Re-verify with a document valid on that date to use student features on ${notCovered.length > 1 ? 'them' : 'it'}.</p>` : ''}
+          ${sv.expiresSoon || notCovered.length ? '<button class="btn btn-ghost block" data-action="vf-replace">Re-verify now</button>' : ''}
+          <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">${vs.returnTo ? 'Continue' : 'Back to home'}</a></div></div>`;
+    }
+    if (!vs.form.init) vs.form = { init: true, fullName: `${user.firstName} ${user.lastName}`, institution: (sv.institution && sv.institution.name) || '', expiry: '', noExpiry: false };
+    let top = '';
+    if (st === 'rejected' && sv.rejection) top = vStatusBox(sv, `<div class="vf-reason sm"><b>Why:</b> ${esc(sv.rejection.reason)}${sv.rejection.message ? `<br><b>Note from our team:</b> ${esc(sv.rejection.message)}` : ''}</div>`);
+    else if (st === 'expired' || st === 'awaiting_document') top = vStatusBox(sv);
+    else if (st === 'pending_review') top = `<div class="card vf-status warn sm">Your new document replaces the one we're reviewing.</div>`;
+    else if (st === 'verified') top = `<div class="card vf-status ok sm">You stay verified until ${fmtDay(sv.validUntil)} while we check your new document.</div>`;
+    return vDocStep(head + top) + (vs.replace ? '<button class="btn btn-ghost block" data-action="vf-cancel-replace">Cancel</button>' : '') + '</div>';
   };
+
+  /* Without the server (static hosting) documents can't be checked securely: simulate, clearly labelled. */
+  function vOffline(back) {
+    if (user.verified) {
+      return `<div class="narrow vf-page">${back}${vStepper(5)}<div class="card verify-done">${tick('tick-xl')}<h1>Verified (offline demo)</h1>
+        <p class="muted">Simulated on this device until ${fmtDay(user.verified.until)}. Real verification needs the Cathay server.</p>
+        <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">Continue</a></div></div>`;
+    }
+    if (vs.step !== 'doc') return vEmailStep(back, 1);
+    return `<div class="narrow vf-page">${back}${vStepper(2)}<h1>Upload your student ID</h1>
+      <div class="card demo-note"><b>Offline demo.</b> Student ID checks run on the Cathay verification server, which isn't connected here, so nothing can be uploaded or verified for real. You can simulate an approval on this device to explore student features.</div>
+      <button class="btn btn-primary block" data-action="vf-simulate">Simulate approval (offline demo only)</button></div>`;
+  }
+
+  async function fetchVerification(rerenderAfter) {
+    if (!liveAccount() || fetchVerification.busy) return;
+    fetchVerification.busy = true;
+    const r = await authCall('GET', '/student/status');
+    fetchVerification.busy = false; fetchVerification.at = Date.now();
+    if (r.status === 401) return signOutLocal('Please sign in again.');
+    if (!r.ok) { if (!sv) sv = { status: (user.student && user.student.status) || 'not_submitted', explanation: r.error || 'Could not load your verification status.' }; }
+    else applyVerification(r.verification);
+    if (rerenderAfter) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+  }
+  /* The server's verdict is the only source of "verified": update the local copy (display cache) from it. */
+  function applyVerification(v) {
+    sv = v;
+    if (user.student) user.student.status = v.status;
+    const was = Boolean(user.verified);
+    const now = v.active ? { email: v.email, at: v.verifiedAt, until: v.validUntil, institution: v.institution && v.institution.name } : null;
+    store.set('verified', now, true); user.verified = now; user.tier = now ? 'Student' : 'Member';
+    if (now && !was) grantWelcome();
+  }
+  function grantWelcome() {
+    const p = perks();
+    if (p.welcome) return;
+    p.welcome = PERKS.welcome; p.welcomeAt = toISO(new Date()); savePerks(p);
+    toast(`Student status verified · +${PERKS.welcome.toLocaleString()} welcome points`);
+  }
+  const readB64 = (file) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => bad(r.error); r.readAsDataURL(file); });
+  async function submitDocuments() {
+    if (vs.busy) return;
+    const fm = vs.form, id = vs.files.id;
+    vs.msg = '';
+    if (!id) vs.msg = 'Add a photo, screenshot or PDF of your student ID.';
+    else if (String(fm.fullName).trim().length < 2) vs.msg = 'Enter your full name as it appears on the document.';
+    else if (String(fm.institution).trim().length < 2) vs.msg = 'Enter the university or institution shown on the document.';
+    else if (!fm.noExpiry && !fm.expiry) vs.msg = "Enter the expiry or 'valid until' date, or tick 'My card doesn't show an expiry date'.";
+    if (vs.msg) return render();
+    vs.busy = true; render();
+    try {
+      const documents = [{ role: 'student_id', mime: id.type, name: id.file.name, data: await readB64(id.file) }];
+      if (fm.noExpiry && vs.files.proof) documents.push({ role: 'enrolment_proof', mime: vs.files.proof.type, name: vs.files.proof.file.name, data: await readB64(vs.files.proof.file) });
+      const r = await authCall('POST', '/student/submission', { declared: { fullName: fm.fullName, institution: fm.institution, expiry: fm.noExpiry ? null : fm.expiry, noExpiry: Boolean(fm.noExpiry) }, documents });
+      vs.busy = false;
+      if (!r.ok) { vs.msg = r.error || 'Upload failed. Try again.'; if (r.needsEmail) { vs.step = 'email'; await fetchVerification(); } return render(); }
+      Object.values(vs.files).forEach((f) => f.url && URL.revokeObjectURL(f.url)); vs.files = {}; vs.replace = false;
+      applyVerification(r.view);
+      toast(r.view.status === 'verified' ? 'Verified' : 'Document sent for review');
+      window.scrollTo(0, 0); render();
+    } catch { vs.busy = false; vs.msg = 'We could not read that file. Try choosing it again.'; render(); }
+  }
 
   const TOOLS = [
     ['Travel essentials', [['ticket', 'Boarding pass', '#/trips'], ['info', 'Travel information'], ['calendar', 'Flight timetable', '#/timetable'], ['clock', 'Flight status', '#/status'], ['refund', 'Rebook and refund', '#/trips'], ['calc', 'Baggage calculator', '#/baggage'], ['alert', 'Delays and cancellations', '#/status']]],
@@ -1685,15 +1892,79 @@
     }));
   }
 
+  /* Verification team (accounts listed in VERIFIERS on the server): review student ID submissions.
+   * Documents are fetched with the reviewer's session, shown from memory, and never cached; every view is logged. */
+  views.review = () => {
+    if (!user || !user.reviewer) return `<div class="narrow"><div class="card empty">Verification team only.</div></div>`;
+    return `<div class="narrow wide"><header class="pagehead"><div><p class="crumb">Verification team</p><h1>Student verification queue</h1>
+      <p class="sub">Check that the document is a genuine student ID or enrolment record, in the account holder's name, from an eligible institution, and valid on their flight dates. Automated checks only flag: you decide. Documents are deleted as soon as you decide. Opening a document is logged.</p></div></header>
+      <div id="revList" class="stack"><p class="muted">Loading…</p></div></div>`;
+  };
+  const revUrls = [];
+  async function loadReview() {
+    const box = $('#revList'); if (!box) return;
+    revUrls.splice(0).forEach((u) => URL.revokeObjectURL(u));
+    const r = await authCall('GET', '/review/queue');
+    if (!r.ok) { box.textContent = r.error || 'Could not load the queue.'; return; }
+    if (!r.items.length) { box.innerHTML = '<div class="card empty">Nothing to review. 🎉</div>'; return; }
+    const mark = { pass: ['ok', '✓'], flag: ['warn', '!'], info: ['muted', 'i'] };
+    const reasons = Object.entries(r.reasons);
+    const max = shiftDate(todayStr(), 365);
+    box.innerHTML = r.items.map((x) => {
+      const s = x.submission, d = s.declared;
+      return `<div class="card rev-card" data-uid="${esc(x.uid)}" data-sub="${esc(s.id)}">
+        <div class="row between"><b>${esc(x.name)}</b><span class="badge warn">Pending · ${esc(fmtDate(s.submittedAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span></div>
+        <p class="muted sm">${esc(x.universityEmail)} · ${esc(x.institution.name)} ${x.institution.recognised ? '<span class="badge ok">recognised</span>' : '<span class="badge warn">not on list</span>'}</p>
+        <div class="rev-grid">
+          <div><p class="lab">Student says</p>
+            <div class="sum-row"><span>Name</span><b>${esc(d.fullName)}</b></div>
+            <div class="sum-row"><span>Institution</span><b>${esc(d.institution)}</b></div>
+            <div class="sum-row"><span>Valid until</span><b>${d.expiry ? esc(d.expiry) : 'no expiry date'}</b></div>
+            ${s.detectedExpiry ? `<div class="sum-row"><span>Read from document</span><b>${esc(s.detectedExpiry)}</b></div>` : ''}
+            <div class="sum-row"><span>Booked flights</span><b>${x.flights.length ? x.flights.map(esc).join(', ') : 'none'}</b></div>
+            ${x.previous ? `<p class="muted xs">Previous submission ${esc(x.previous.submittedAt.slice(0, 10))}</p>` : ''}
+            <p class="lab" style="margin-top:12px">Automated checks</p>
+            <ul class="rev-checks">${s.checks.map((c) => `<li class="${mark[c.result][0]}"><span class="ck">${mark[c.result][1]}</span><span><b>${esc(c.label)}</b>${c.detail ? `<br><span class="muted xs">${esc(c.detail)}</span>` : ''}</span></li>`).join('')}</ul></div>
+          <div><p class="lab">Documents</p>${s.documents.map((doc) => `<div class="rev-doc"><button class="btn btn-ghost sm-btn" data-doc="${esc(doc.id)}" data-mime="${esc(doc.mime)}" ${x.own ? 'disabled' : ''}>${icon('ticket')} Open ${doc.role === 'student_id' ? 'student ID' : 'enrolment proof'} (${esc(doc.mime.split('/')[1].toUpperCase())}${doc.width ? `, ${doc.width}×${doc.height}` : ''})</button><div class="rev-view"></div></div>`).join('')}</div>
+        </div>
+        ${x.own ? '<p class="muted sm">This is your own submission: another reviewer must decide.</p>' : `<div class="rev-act">
+          <div class="row gap-sm"><label class="field"><span>Valid until (max ${esc(fmtDay(max))})</span><input type="date" class="rev-until" value="${esc(x.suggestedValidUntil)}" min="${todayStr()}" max="${max}"></label>
+          <button class="btn btn-primary sm-btn" data-rev="approve">Approve</button></div>
+          <div class="row gap-sm"><label class="field"><span>Or ask for more information</span><select class="rev-reason">${reasons.map(([k]) => `<option value="${k}">${k.replace(/_/g, ' ')}</option>`).join('')}</select></label>
+          <label class="field"><span>Note to the student (optional)</span><input class="rev-msg" maxlength="400" placeholder="e.g. The photo is cut off at the bottom."></label>
+          <button class="btn btn-ghost sm-btn" data-rev="reject">Reject</button></div></div>`}
+      </div>`;
+    }).join('');
+    box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', async () => {
+      const view = b.nextElementSibling;
+      view.textContent = 'Opening…';
+      try {
+        const res = await fetch(API + '/api/review/document/' + encodeURIComponent(b.dataset.doc), { headers: { Authorization: 'Bearer ' + session() }, cache: 'no-store' });
+        if (!res.ok) { view.textContent = (await res.json().catch(() => ({}))).error || 'Could not open it.'; return; }
+        const url = URL.createObjectURL(await res.blob()); revUrls.push(url);
+        view.innerHTML = b.dataset.mime === 'application/pdf' ? `<object class="vf-pdf" data="${url}" type="application/pdf"><a href="${url}" target="_blank" rel="noopener">Open PDF</a></object>` : `<img class="vf-img" src="${url}" alt="Submitted document">`;
+      } catch { view.textContent = 'Could not open it.'; }
+    }));
+    box.querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', async () => {
+      const card = b.closest('.rev-card'), approve = b.dataset.rev === 'approve';
+      const body = approve ? { decision: 'approve', validUntil: card.querySelector('.rev-until').value, submissionId: card.dataset.sub }
+        : { decision: 'reject', reasonCode: card.querySelector('.rev-reason').value, message: card.querySelector('.rev-msg').value, submissionId: card.dataset.sub };
+      if (!approve && !confirm('Ask the student for more information? The document will be deleted and they will see the reason.')) return;
+      const res = await authCall('POST', `/review/${encodeURIComponent(card.dataset.uid)}/decision`, body);
+      toast(res.ok ? (approve ? `Approved until ${res.validUntil}. Document deleted.` : 'Rejected. Document deleted.') : res.error || 'Failed.');
+      loadReview();
+    }));
+  }
+
   /* Safety & privacy notice for students (public). */
   views['chat-safety'] = () => `
     <div class="narrow wide legal"><header class="pagehead"><div><p class="crumb">Student flight chat</p><h1>Safety &amp; privacy</h1>
       <p class="sub">How the student chat works, what we collect and what happens if someone breaks the rules.</p></div></header>
       <div class="card"><h3>Who can join</h3><ul>
-        <li>Students aged 18+ who verified a university email with a one-time code, signed in, and booked on that flight.</li>
+        <li>Students aged 18+ who verified a university email with a one-time code <b>and</b> had a current student ID or enrolment record approved by our verification team, valid on the flight date, signed in, and booked on that flight.</li>
         <li>Joining is optional and you can leave at any time. It opens 7 days before departure.</li>
         <li>Group conversation only: there are no private or one-to-one messages.</li>
-        <li><b>Limits:</b> a university email shows that someone has access to that university's email system. It does not prove identity, enrolment or character. Treat people you meet online with care.</li></ul></div>
+        <li><b>Limits:</b> a university email and a checked student ID show that someone is a current student. They do not prove character. Treat people you meet online with care.</li></ul></div>
       <div class="card"><h3>What others see, and what they don't</h3><ul>
         <li>Others see your first name, a verified tick and, only if you chose to share it when booking, your university.</li>
         <li>Never your surname, email, booking reference, seat number or seating preferences.</li>
@@ -1717,14 +1988,14 @@
   views.parents = () => `
     <div class="narrow wide legal"><header class="pagehead"><div><p class="crumb">For parents</p><h1>Student flight chat: questions from parents</h1></div></header>
       ${[
-        ['Who can use it?', 'Only students aged 18 or over, verified with a one-time code sent to a university email address, signed in to their own account and booked on that flight. Under-18s cannot join.'],
+        ['Who can use it?', 'Only students aged 18 or over, verified with a one-time code sent to a university email address and a student ID checked by our verification team, signed in to their own account and booked on that flight. Under-18s cannot join.'],
         ['Can strangers message my child privately?', 'No. There are no private or one-to-one messages: only one group conversation per flight, visible to all verified students on it.'],
         ["What do others see about my child?", 'Their first name and, only if they choose, their university. Never their surname, contact details, seat number or booking.'],
         ['Will they be seated next to someone from the chat?', 'Student seating is optional. Students can privately ask not to sit next to someone; nobody can ask to sit next to a particular person.'],
         ['How is behaviour moderated?', 'Every message can be reported. Moderators review reports by severity. A first confirmed violation is a warning; a second cancels that booking with no refund. Threats are escalated to the airline security team and, where needed, the police.'],
         ['How long are messages kept?', 'Messages are deleted 48 hours after the flight arrives. Reported messages are kept separately and only for as long as an investigation or legal obligation requires.'],
         ['Can I read my child’s messages?', 'No. Students using the chat are adults, so their conversations are private to the participants and to moderators reviewing a report.'],
-        ['What are the limits?', 'Verification shows that someone has access to a university email; it is not an identity check. We encourage students to keep personal details private and to tell crew or staff about any concern.'],
+        ['What are the limits?', 'Verification shows that someone is a current student at an eligible institution; it is not a background check. We encourage students to keep personal details private and to tell crew or staff about any concern.'],
       ].map(([q, a]) => `<div class="card"><h3>${q}</h3><p class="muted">${a}</p></div>`).join('')}
       <p class="muted sm">Prototype notice: policies shown here are proposals for review by Hong Kong legal counsel and the airline's safeguarding team.</p>
     </div>`;
@@ -1733,8 +2004,8 @@
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation', 'review']);
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -1753,6 +2024,8 @@
     window.scrollTo(0, 0);
     if (name === 'chat') mountChat();
     if (name === 'moderation') loadReports();
+    if (name === 'review') loadReview();
+    if (user && liveAccount() && (name !== 'verify' || (sv && sv.status === 'pending_review' && !vs.replace)) && Date.now() - (fetchVerification.at || 0) > 60000) fetchVerification(true); // status can change on the server (review, expiry)
     liveSync();
   }
 
@@ -1859,7 +2132,28 @@
       store.set('trips', []); store.set('perks', {}); store.set('sales', {}); store.set('seatplans', {});
       loadState(); toast('Bookings and perks cleared.'); location.hash = '#/home'; render();
     },
-    unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
+    async unverify() {
+      if (!confirm('Remove your student verification? Student features stop now and you will need to verify again (email and student ID).')) return;
+      if (liveAccount()) { const r = await authCall('DELETE', '/student/verification'); if (!r.ok) return toast(r.error || 'Could not remove it.'); }
+      store.set('verified', null, true); user.verified = null; user.tier = 'Member'; sv = null;
+      Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null, files: {}, form: {}, replace: false });
+      toast('Student verification removed.'); render();
+    },
+    'vf-remove'(el) { vPick(el.dataset.slot, null); },
+    'vf-replace'() { vs.replace = true; vs.msg = ''; render(); },
+    'vf-cancel-replace'() { vs.replace = false; vs.msg = ''; render(); },
+    async 'vf-withdraw'() {
+      if (!confirm('Remove the document you sent? It will be deleted and your review cancelled.')) return;
+      const r = await authCall('DELETE', '/student/submission');
+      if (!r.ok) return toast(r.error || 'Could not remove it.');
+      applyVerification(r.view); toast('Document removed and deleted.'); render();
+    },
+    'vf-simulate'() {
+      const v = { email: vs.email, at: toISO(new Date()), until: shiftDate(todayStr(), 365), institution: SZ.universityFromEmail(vs.email), simulated: true };
+      store.set('verified', v); user.verified = v; user.tier = 'Student'; grantWelcome();
+      if (vs.returnTo) { const to = vs.returnTo; vs.returnTo = ''; location.hash = to; return; }
+      render();
+    },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
     'claim-adapter'(el) {
@@ -1953,6 +2247,8 @@
       startVerify(f.get('email'));
     } else if (id === 'verifyCodeForm') {
       confirmVerify(f.get('code'));
+    } else if (id === 'verifyDocForm') {
+      submitDocuments();
     } else if (form.classList.contains('rw-form')) {
       const rw = REWARDS.find((r) => r.id === form.dataset.reward), t = findTrip(f.get('ref'));
       const err = redeem(t, rw);
@@ -1985,7 +2281,13 @@
     }
   });
 
+  /* Verification form: keep typed values and picked files across re-renders. */
+  document.addEventListener('input', (e) => {
+    if (e.target.classList.contains('vf-in') && e.target.type !== 'checkbox') vs.form[e.target.name] = e.target.value;
+  });
   document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('vf-input')) { vPick(e.target.dataset.slot, e.target.files && e.target.files[0]); return; }
+    if (e.target.classList.contains('vf-in') && e.target.type === 'checkbox') { vs.form.noExpiry = e.target.checked; if (!e.target.checked && vs.files.proof) vPick('proof', null); else render(); return; }
     if (e.target.classList.contains('share-uni')) {
       const t = findTrip(e.target.dataset.ref);
       t.showUni = e.target.checked; saveTrips();
@@ -2064,25 +2366,24 @@
     const code = String(rawCode || '').replace(/\s/g, '');
     if (!/^\d{6}$/.test(code)) { vs.msg = 'Enter the 6-digit code.'; return render(); }
     vs.busy = true;
-    let ok = false, msg = '';
+    let ok = false, msg = '', lastConfirm = null;
     if (vs.localCode) {
       if (Date.now() > vs.localExpires) msg = 'That code has expired. Request a new one.';
       else if (code === vs.localCode) ok = true;
       else msg = 'That code is not correct.';
     } else {
       const r = await apiPost('/api/verify/confirm', { email: vs.email, code });
+      lastConfirm = r;
       if (r.unreachable) msg = 'Could not reach the verification server.';
       else if (r.ok && r.verified) ok = true;
       else msg = r.error || 'That code is not correct.';
     }
     vs.busy = false;
     if (ok) {
-      const v = { email: vs.email, at: toISO(new Date()) };
-      store.set('verified', v); user.verified = v; user.tier = 'Student'; vs.step = 'done'; vs.msg = '';
-      const p = perks();
-      if (!p.welcome) { p.welcome = PERKS.welcome; p.welcomeAt = toISO(new Date()); savePerks(p); }
-      toast(`Student status verified · +${PERKS.welcome.toLocaleString()} welcome points`);
-      if (vs.returnTo) { const to = vs.returnTo; vs.returnTo = ''; location.hash = to; return; }
+      // Step 1 done. The account is a verified student only after step 2 (student ID) is approved on the server.
+      vs.step = 'doc'; vs.msg = ''; vs.form = {};
+      if (lastConfirm && lastConfirm.verification) applyVerification(lastConfirm.verification);
+      toast('University email verified. Next: your student ID.');
     } else vs.msg = msg;
     render();
   }
@@ -2098,7 +2399,7 @@
       LIVE.on = true; document.body.dataset.live = 'on';
       if (session() && !isLocalAccount()) { // refresh this account's data from the server (another device may have changed it)
         const r = await authCall('GET', '/me');
-        if (r.ok) useAccount(session(), r.user, r.data);
+        if (r.ok) { useAccount(session(), r.user, r.data); await fetchVerification(); }
         else if (r.status === 401) return signOutLocal('Your session expired. Please sign in again.');
       }
       const y = window.scrollY; render(); window.scrollTo(0, y);

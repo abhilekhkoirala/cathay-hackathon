@@ -1,7 +1,8 @@
 /* Student flight chat (mounted by server.js under /api/chat and /api/mod).
  *
  * Every rule is enforced HERE, on the server, never only in the browser:
- *  - who may join: a signed-in account, verified as a student by the server (university email code), aged 18+
+ *  - who may join: a signed-in account, verified as a student by the server (university email + approved student ID,
+ *    valid on the departure date), aged 18+
  *    on the departure date, with an active booking on that flight, not removed for conduct;
  *  - when: from 7 days before departure until 48 h after arrival (scheduled arrival in this prototype);
  *  - group conversation only: one room per flight, no private or one-to-one messages;
@@ -18,6 +19,7 @@ const express = require('express');
 const { db, save } = require('./db');
 const { auth, ageOn, isModerator } = require('./accounts');
 const live = require('./live');
+const studentVerify = require('./student-verify');
 
 const OPEN_BEFORE_MS = 7 * 24 * 3600 * 1000;
 const DELETE_AFTER_MS = 48 * 3600 * 1000;
@@ -47,7 +49,8 @@ const times = (f) => {
 function ineligible(u, fid) {
   const f = db.flights[fid];
   if (!f) return 'Unknown flight.';
-  if (!u.student) return 'Verify your student status with your university email to join the student chat.';
+  const elig = studentVerify.eligibleOn(u, f.seg.dep);
+  if (!elig.ok) return elig.reason;
   if ((C.removed[fid] || {})[u.id]) return 'You have been removed from this chat for not following the student chat guidelines.';
   if (ageOn(u.dob, f.seg.dep) < 18) return 'The student chat is for students aged 18 and over.';
   if (!f.pax[u.id]) return 'Only passengers booked on this flight can join its chat.';

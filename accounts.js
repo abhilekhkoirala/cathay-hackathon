@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const { db, save } = require('./db');
+const studentVerify = require('./student-verify');
 
 const SESSION_MS = 30 * 24 * 3600 * 1000;
 const MAX_DATA = 200 * 1024;
@@ -35,13 +36,15 @@ function newMemberId() {
   return id;
 }
 /* What the browser may see about its own account. */
-const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: u.student || null, moderator: isModerator(u) });
+const publicUser = (u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, dob: u.dob, memberId: u.memberId, refCode: u.refCode, invitedBy: u.invitedBy || '', memberSince: u.createdAt.slice(0, 4), student: studentVerify.summary(u), moderator: isModerator(u), reviewer: studentVerify.isReviewer(u) });
+/* Account data for the browser. `verified` always comes from the server's verification record, never from a device. */
+const userDataFor = (u) => ({ ...(db.userData[u.id] || {}), verified: studentVerify.clientVerified(u) });
 
 function startSession(res, u) {
   const token = crypto.randomBytes(32).toString('hex');
   db.sessions[token] = { uid: u.id, exp: Date.now() + SESSION_MS };
   save();
-  res.json({ ok: true, token, user: publicUser(u), data: db.userData[u.id] || {} });
+  res.json({ ok: true, token, user: publicUser(u), data: userDataFor(u) });
 }
 /* The signed-in user for a request (Bearer token), or null. */
 function userFromReq(req) {
@@ -54,12 +57,6 @@ function auth(req, res, next) {
   if (!who) return res.status(401).json({ ok: false, error: 'Please sign in again.' });
   req.user = who.user; req.token = who.token;
   next();
-}
-/* Student status as recorded by the SERVER when the university-email code was confirmed (the browser's copy is not trusted). */
-function recordStudent(uid, email) {
-  if (!db.users[uid]) return;
-  db.users[uid].student = { email, at: new Date().toISOString() };
-  save();
 }
 const ageOn = (dob, when) => {
   const b = new Date(dob), d = new Date(when);
@@ -117,13 +114,20 @@ router.post('/auth/login', limit(30), (req, res) => {
 
 router.post('/auth/logout', auth, (req, res) => { delete db.sessions[req.token]; save(); res.json({ ok: true }); });
 
-router.get('/me', auth, (req, res) => res.json({ ok: true, user: publicUser(req.user), data: db.userData[req.user.id] || {} }));
+router.get('/me', auth, (req, res) => res.json({ ok: true, user: publicUser(req.user), data: userDataFor(req.user) }));
 
 router.put('/me/data', express.json({ limit: '220kb' }), auth, (req, res) => {
   const data = req.body && req.body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return res.status(400).json({ ok: false, error: 'Bad data.' });
   const clean = {};
-  for (const k of ['trips', 'prefs', 'verified', 'perks', 'chatName']) if (k in data) clean[k] = data[k];
+  for (const k of ['trips', 'prefs', 'perks', 'chatName']) if (k in data) clean[k] = data[k]; // 'verified' is server-owned
+  // Student-only perks can't be claimed by an account that isn't a currently verified student.
+  if (!studentVerify.clientVerified(req.user) && clean.perks && typeof clean.perks === 'object') {
+    const old = (db.userData[req.user.id] || {}).perks || {};
+    for (const k of ['welcome', 'welcomeAt', 'redeemed', 'adapter', 'sp']) { if (k in old) clean.perks[k] = old[k]; else delete clean.perks[k]; }
+    const oldBuys = (old.seatBuys || []).filter((b) => b && b.with === 'sp');
+    clean.perks.seatBuys = [...(Array.isArray(clean.perks.seatBuys) ? clean.perks.seatBuys : []).filter((b) => b && b.with !== 'sp'), ...oldBuys];
+  }
   if (JSON.stringify(clean).length > MAX_DATA) return res.status(413).json({ ok: false, error: 'Too much data.' });
   // Cancellations made by the server (chat conduct) can't be undone by a device sending an older copy.
   const prev = (db.userData[req.user.id] || {}).trips || [];
@@ -142,9 +146,9 @@ router.get('/me/referrals', auth, (req, res) => {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((u) => {
       const d = db.userData[u.id] || {};
-      return { name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), verified: Boolean(d.verified), flown: (d.trips || []).some((t) => t && t.checkedIn) };
+      return { name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), verified: Boolean(studentVerify.clientVerified(u)), flown: (d.trips || []).some((t) => t && t.checkedIn) };
     });
   res.json({ ok: true, referrals: list });
 });
 
-module.exports = { router, auth, userFromReq, recordStudent, ageOn, isModerator };
+module.exports = { router, auth, userFromReq, ageOn, isModerator };

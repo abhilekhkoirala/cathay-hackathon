@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
 const accounts = require('./accounts');
+const studentVerify = require('./student-verify');
 
 const PORT = Number(process.env.PORT || 3000);
 const BRAND = 'Cathay Student Verify';
@@ -69,7 +70,8 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 const smallJson = express.json({ limit: '2kb' });
-app.use((req, res, next) => (req.path === '/api/me/data' ? next() : smallJson(req, res, next))); // account data has its own larger limit
+const OWN_LIMIT = new Set(['/api/me/data', '/api/student/submission']); // account data and document uploads have their own larger limits
+app.use((req, res, next) => (OWN_LIMIT.has(req.path) ? next() : smallJson(req, res, next)));
 
 const allowed = (process.env.ALLOWED_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use((req, res, next) => {
@@ -77,7 +79,7 @@ app.use((req, res, next) => {
   if (origin && allowed.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -91,6 +93,10 @@ app.post('/api/verify/start', rateLimit, async (req, res) => {
   const firstName = String((req.body && req.body.firstName) || '').slice(0, 40);
   if (!isEduEmail(email)) {
     return res.status(400).json({ ok: false, error: 'Use your university email — the domain must include .edu (e.g. name@uni.edu or name@uni.edu.hk).' });
+  }
+  const who = accounts.userFromReq(req);
+  if (who && studentVerify.emailInUse(who.user.id, email)) {
+    return res.status(409).json({ ok: false, error: 'This university email is already linked to another Cathay account.' });
   }
   const now = Date.now();
   const prev = pending.get(email);
@@ -161,10 +167,16 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
     return res.status(400).json({ ok: false, error: `That code is not correct. ${MAX_ATTEMPTS - entry.attempts} attempts left.` });
   }
   pending.delete(email);
-  // Signed in? Record the student status on the account, server-side (used for chat eligibility).
+  // Step 1 of 2. Signed in? Record the verified university email on the account, server-side; the account is a
+  // verified student only after step 2 (student ID) is approved (student-verify.js).
   const who = accounts.userFromReq(req);
-  if (who) accounts.recordStudent(who.user.id, email);
-  res.json({ ok: true, verified: true, email, verifiedAt: new Date().toISOString() });
+  let verification = null;
+  if (who) {
+    const r = studentVerify.recordEmailVerified(who.user.id, email);
+    if (!r.ok) return res.status(409).json({ ok: false, error: r.error || 'Could not record the verification.' });
+    verification = studentVerify.view(who.user);
+  }
+  res.json({ ok: true, verified: true, emailVerified: true, email, verifiedAt: new Date().toISOString(), verification });
 });
 
 /* Live demo: shared flights (OAG) and seats for every device. */
@@ -173,6 +185,8 @@ app.use('/api/live', require('./live').router);
 app.use('/api', accounts.router);
 /* Student flight chat: eligibility, reporting, moderation and retention enforced server-side. */
 app.use('/api', require('./chat-server').router);
+/* Student verification step 2 (student ID), status, and the reviewer console. */
+app.use('/api', studentVerify.createRouter({ auth: accounts.auth }));
 
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
 const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/chat.js': 'chat.js', '/chat-config.js': 'chat-config.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };

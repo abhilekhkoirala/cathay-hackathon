@@ -13,7 +13,8 @@ const path = require('path');
 const vm = require('vm');
 const express = require('express');
 const oag = require('./oag');
-const { auth } = require('./accounts'); // who is booking comes from the login, never from the request body
+const { auth, ageOn } = require('./accounts'); // who is booking comes from the login, never from the request body
+const studentVerify = require('./student-verify');
 
 /* ---------- reuse the browser code (data.js + student-zone.js) without copying it ---------- */
 const sandbox = { window: {} };
@@ -194,10 +195,15 @@ router.post('/flights/:id/pax', auth, (req, res) => {
     if (old) { delete f.pax[uid]; replan(f); save(); broadcast(id); }
     return res.json({ ok: true, state: view(id, f) });
   }
-  const student = Boolean(b.student && typeof b.student === 'object') && cabin === 'Economy';
+  // Student seating only for accounts the SERVER knows are verified students, valid on the flight date, aged 18+.
+  // The university comes from the verified record, not from the request.
+  const asked = Boolean(b.student && typeof b.student === 'object') && cabin === 'Economy';
+  const elig = asked ? studentVerify.eligibleOn(req.user, f.seg.dep) : { ok: false };
+  const student = asked && elig.ok && ageOn(req.user.dob, f.seg.dep) >= 18;
+  const vrec = student && studentVerify.clientVerified(req.user);
   const seat = SEAT_RE.test(b.seat) ? b.seat : null, locked = SEAT_RE.test(b.locked) ? b.locked : null;
   const next = {
-    n: old ? old.n : ++f.order, cabin, student, uni: student ? str(b.student.uni, 60) : '', share: student && b.student.share === true,
+    n: old ? old.n : ++f.order, cabin, student, uni: student ? str(SZ.universityFromEmail(vrec.email), 60) : '', share: student && b.student.share === true,
     seat: student ? null : seat, locked: student ? locked : null,
   };
   const want = next.seat || next.locked;
@@ -218,7 +224,7 @@ router.post('/flights/:id/pax', auth, (req, res) => {
     f.log = f.log.slice(0, 30);
   }
   save(); broadcast(id);
-  res.json({ ok: true, state: view(id, f) });
+  res.json({ ok: true, state: view(id, f), studentDenied: asked && !student ? (elig.reason || 'Student seating is for verified students aged 18+.') : undefined });
 });
 
 module.exports = { router, flightId, pseudo, replan, broadcast, _db: () => db, _schedule: schedule };
