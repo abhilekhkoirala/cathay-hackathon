@@ -16,6 +16,7 @@ process.env.DOC_VAULT = path.join(TMP, 'vault');
 process.env.DOC_ENCRYPTION_KEY = 'a'.repeat(64);
 process.env.VERIFIERS = 'reviewer@cathay.example';
 process.env.MODERATORS = '';
+process.env.STUDENT_AUTO_APPROVE = 'off'; // a developer's .env may enable demo auto-approval; these tests expect manual review
 for (const k of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM', 'OAG_KEY']) delete process.env[k];
 // A legacy account verified with the old email-only flow, to check it is asked for a student ID.
 fs.writeFileSync(process.env.LIVE_DB, JSON.stringify({ users: { u_legacy: { id: 'u_legacy', firstName: 'Lee', lastName: 'Old', email: 'lee@example.com', dob: '2000-01-01', memberId: 'CS 1', refCode: 'LEE-1', createdAt: '2025-01-01T00:00:00Z', salt: 'x', hash: 'y', student: { email: 'lee@cuhk.edu.hk', at: '2025-02-01T00:00:00Z' } } }, sessions: {}, userData: {}, flights: {}, searches: {} }));
