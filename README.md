@@ -29,6 +29,14 @@ Seeded bookings: `K7M2QX` (HKG ⇄ KTM, first flight 38 days from today) · `M7S
 **Home states:** with an upcoming booking you get the full dashboard (points donut, next flight, flight companion with the 7-day chat lock). With no upcoming booking (cancel `M7S2HK` and `K7M2QX` in *My flights*) it switches to the *No Flight Booked* layout. Inside 7 days of departure the chat card shows as open.
 **To demo online check-in** (opens 48 h before departure), change `addDays(38, …)` to `addDays(1, …)` in `data.js` and reset the demo data.
 
+## Landing page (`landing.html`)
+
+A cinematic, scroll-driven opening page for the pitch: one camera move from a jet at the gate at sunset, into the cabin window, out above the clouds and into the light, with two-line headlines (Family Circle → student seating → student points → "Stay in the circle. Until 25.") and a counter in the corner. Below it: Cathay at a glance, what's inside the app (live features + coming next) and why it works for Cathay. Every button opens the app (`index.html`).
+
+- Drawn entirely on a `<canvas>` (no images or libraries), so it works offline; respects *reduce motion*.
+- `landing.html?p=0.5` freezes the story at that point (useful for screenshots and slides).
+- Facts used: founded 1946 in Hong Kong, 100+ destinations, founding oneworld member (Cathay Pacific, 2026).
+
 ## Student verification ("Cathay Student Verify")
 
 1. Settings → **Verify student status** (or the banner on *Student offers*).

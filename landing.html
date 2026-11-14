@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#006564">
+  <title>Cathay Student — One membership, the whole journey</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b4a35'/%3E%3Ctext x='16' y='23.5' font-family='Arial,sans-serif' font-weight='700' font-size='21' text-anchor='middle' fill='%23c9e265'%3Ec%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600&family=Playfair+Display:ital,wght@1,500&display=swap">
+  <link rel="stylesheet" href="landing.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="landing.html"><b>cathay</b><span>student</span></a>
+    <nav aria-label="Sections">
+      <a href="#glance">Cathay</a>
+      <a href="#inside">Inside the app</a>
+      <a href="#value">Why it works</a>
+    </nav>
+    <a class="pill" href="index.html#/home">Open the app</a>
+  </header>
+
+  <!-- Scroll-driven cinematic: one camera move from the gate, into the cabin, out above the clouds. -->
+  <section class="hero" id="top" aria-label="Cathay Student story">
+    <div class="stage">
+      <canvas id="sky" aria-hidden="true"></canvas>
+      <div class="shade" aria-hidden="true"></div>
+
+      <div class="hud" aria-hidden="true">
+        <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+        <div class="coords">HKG · 22.31°N 113.91°E</div>
+        <div class="rail"><i id="railFill"></i></div>
+      </div>
+
+      <div class="scene left" data-from="0" data-to="0.2">
+        <h2><span class="caps">Four small balances.</span><span class="ital">One family.</span></h2>
+        <p>Every member earns on their own. On their own, it's never enough for a trip.</p>
+      </div>
+      <div class="scene right" data-from="0.22" data-to="0.4">
+        <h2><span class="caps">Now they add up.</span><span class="ital">Family Circle.</span></h2>
+        <p>One view of the whole family's miles. Nothing moves until you book.</p>
+      </div>
+      <div class="scene left" data-from="0.43" data-to="0.6">
+        <h2><span class="caps">No student flies alone.</span><span class="ital">Seated next to future classmates.</span></h2>
+        <p>Verified students are seated side by side, from the same university when possible.</p>
+      </div>
+      <div class="scene right" data-from="0.63" data-to="0.8">
+        <h2><span class="caps">Every trip home counts.</span><span class="ital">Points that become Asia Miles.</span></h2>
+        <p>Spend them on Wi-Fi, seats and lounges while you study. 70% convert when you graduate.</p>
+      </div>
+      <div class="scene center" data-from="0.84" data-to="1.01">
+        <h2><span class="caps">Stay in the circle.</span><span class="ital">Until 25.</span></h2>
+        <p>One membership from your first flight to your first job.</p>
+        <a class="pill big" href="index.html#/home">Open Cathay Student</a>
+      </div>
+
+      <div class="counter" aria-live="off">
+        <span class="lab" id="counterLab">Family miles</span>
+        <b id="counter">1,500 · 2,900 · 3,800 · 4,100</b>
+      </div>
+      <div class="hint" id="hint">Scroll</div>
+    </div>
+  </section>
+
+  <section class="block" id="glance">
+    <p class="eyebrow">Cathay at a glance</p>
+    <h2 class="title"><span class="caps">Hong Kong's home airline.</span><span class="ital">Since 1946.</span></h2>
+    <div class="facts">
+      <div><b>1946</b><span>Founded in Hong Kong</span></div>
+      <div><b>100+</b><span>Destinations worldwide</span></div>
+      <div><b>oneworld</b><span>Founding alliance member</span></div>
+      <div><b>One</b><span>Membership: miles and status in the Cathay programme</span></div>
+    </div>
+  </section>
+
+  <section class="block" id="inside">
+    <p class="eyebrow">Inside the app</p>
+    <h2 class="title"><span class="caps">One membership.</span><span class="ital">The whole journey.</span></h2>
+    <div class="cards">
+      <a class="card live" href="index.html#/trips">
+        <span class="tag">Live</span><h3>Student seating</h3>
+        <p>Say yes once. At check-in you're seated next to other students; the planner re-seats them if a paying passenger buys a seat.</p>
+        <span class="go">Try it →</span></a>
+      <a class="card live" href="index.html#/rewards">
+        <span class="tag">Live</span><h3>Student points &amp; rewards</h3>
+        <p>1.5 points per mile on your flights. Spend on Wi-Fi, seats and lounges; 70% become Asia Miles at graduation.</p>
+        <span class="go">Open rewards →</span></a>
+      <a class="card live" href="index.html#/rewards">
+        <span class="tag">Live</span><h3>Student perks</h3>
+        <p>A free plug adapter for your university's country, invite-a-friend miles and a 12-month graduation gift.</p>
+        <span class="go">See perks →</span></a>
+      <div class="card soon">
+        <span class="tag">Next</span><h3>Family Circle</h3>
+        <p>The family's miles in one view, child-to-parent rules made clear, and family miles at checkout.</p>
+        <span class="go">Coming next</span></div>
+      <div class="card soon">
+        <span class="tag">Next</span><h3>Flight companion</h3>
+        <p>A personal trip chat that opens 7 days before departure: baggage, check-in, arrival.</p>
+        <span class="go">Coming next</span></div>
+      <div class="card soon">
+        <span class="tag">Next</span><h3>Travel community</h3>
+        <p>Meet the students on your flight and at your university before you land.</p>
+        <span class="go">Coming next</span></div>
+    </div>
+  </section>
+
+  <section class="block" id="value">
+    <p class="eyebrow">Why it works for Cathay</p>
+    <h2 class="title"><span class="caps">More value for students.</span><span class="ital">About the same cost.</span></h2>
+    <div class="facts three">
+      <div><b>1.05×</b><span>What students get, compared with normal miles</span></div>
+      <div><b>0.89×</b><span>What Cathay pays on student points</span></div>
+      <div><b>Spare</b><span>Rewards use empty seats and quiet flights</span></div>
+    </div>
+    <a class="pill big" href="index.html#/home">Open Cathay Student</a>
+  </section>
+
+  <footer class="foot">Concept prototype built for a hackathon demo. Flights, points and people shown are illustrative. Facts: Cathay Pacific, 2026.</footer>
+
+  <script src="landing.js"></script>
+</body>
+</html>

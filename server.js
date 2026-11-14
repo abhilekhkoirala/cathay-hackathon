@@ -163,7 +163,7 @@ app.post('/api/verify/confirm', rateLimit, (req, res) => {
 });
 
 /* Serve only the app's own files (not server.js, package.json, .env ...). */
-const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/config.js': 'config.js' };
+const FILES = { '/': 'index.html', '/index.html': 'index.html', '/mobile.html': 'mobile.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/data.js': 'data.js', '/student-zone.js': 'student-zone.js', '/landing.html': 'landing.html', '/landing.css': 'landing.css', '/landing.js': 'landing.js', '/config.js': 'config.js' };
 app.get(Object.keys(FILES), (req, res) => res.sendFile(path.join(__dirname, FILES[req.path])));
 
 if (require.main === module) {
