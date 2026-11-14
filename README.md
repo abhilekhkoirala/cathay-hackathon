@@ -51,13 +51,13 @@ Seeded bookings: `K7M2QX` (HKG ⇄ NRT, check-in open) · `M7S2HK` (Moscow → H
 
 ## Student seating
 
-Verified students (18+) are automatically seated next to another student, so a student flying to a new city for the first time can talk to people going to the same university about campus, housing, getting there and everything else, instead of just sleeping through the flight. Students don't fill in or choose anything: being verified is enough.
+Verified students (18+) are automatically seated next to another student, so a student flying to a new city for the first time can talk to people going to the same university about campus, housing, getting there and everything else, instead of just sleeping through the flight. Verified students see one question, in *Review & pay* and on the trip page: **"Do you want to be seated next to students?"** *Yes* shows a confirmation pop-up and they are seated next to students automatically; *No* means they book and check in like any other passenger. Students never choose their seat themselves.
 
 There is **no student section**. The planner seats students in small groups of 2–3 side by side, e.g. `9A 9B 9C`, then `13A 13B`, from the same university when possible, otherwise any students. **Every other seat stays on sale.** When a paying passenger buys a seat that was planned for a student, the planner re-runs and moves only the students whose group was broken; everyone else keeps their seat. A student's seat is fixed once they check in.
 
 **Demo flow** (after *Profile → Reset demo data* and verifying with e.g. `name@link.cuhk.edu.hk`):
 
-1. *My trips* → `M7S2HK` Moscow → Hong Kong: the *Student seating* card shows how many other students are on the flight.
+1. *My trips* → `M7S2HK` Moscow → Hong Kong → answer **Yes** to *Do you want to be seated next to students?*
 2. **Check in** → *Your seat*: the seat is already chosen, next to another student (e.g. *"40G, next to Mei · CUHK · Same university as you"*).
 3. The boarding pass shows a **STUDENT** tag and who you're seated next to.
 4. **See how students are seated (demo)** opens the planner: tap any seat to sell it to a paying passenger and watch the affected students get re-seated (the change log lists every move).

@@ -83,6 +83,7 @@ upload mobile.html "text/html; charset=utf-8"
 upload styles.css  "text/css; charset=utf-8"
 upload app.js      "text/javascript; charset=utf-8"
 upload data.js     "text/javascript; charset=utf-8"
+upload student-zone.js "text/javascript; charset=utf-8"
 upload config.js   "text/javascript; charset=utf-8"
 
 say "Refreshing the CloudFront cache"

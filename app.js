@@ -168,8 +168,27 @@
 
   /* ---------- student seating ---------- */
   const studentOk = (iso) => Boolean(user && user.verified && SZ.isAdult(user.dob, iso));
-  const studentTrip = (t) => t.cabin === 'Economy' && studentOk(t.segments[0].dep);
+  const studentEligible = (t) => t.cabin === 'Economy' && studentOk(t.segments[0].dep);
+  /* Only students who answered "yes" are seated next to students; "no" books like everyone else. */
+  const studentTrip = (t) => studentEligible(t) && t.studentSeat === true;
   const who = (x) => `<b>${esc(x.name)}</b> · ${esc(x.uni)}`;
+  const verifiedLabel = () => `<div class="sz-verified">${tick()} Verified student</div>`;
+  const SEAT_QUESTION = 'Do you want to be seated next to students?';
+
+  function showModal(title, text) {
+    document.querySelector('.modal-bg')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <div class="modal" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+          <div class="modal-ico">${icon('cap')}</div>
+          <h2 id="modalTitle">${esc(title)}</h2>
+          <p class="muted">${esc(text)}</p>
+          <button class="btn btn-primary block" data-action="modal-close">OK</button>
+        </div>
+      </div>`);
+    $('.modal .btn').focus();
+  }
+  const seatYesModal = () => showModal('Great choice!', "We will do our best to seat you next to other students on this flight. Your seat will be assigned automatically at check-in.");
 
   /* Re-runs the student seat planner for one flight with every seat sold so far, and remembers the
    * result so students only move when a seat planned for them is bought. */
@@ -190,7 +209,7 @@
   /* Shown in the booking form and on the trip page when the user isn't a verified adult student. */
   function studentGate(iso) {
     if (!user) return '';
-    if (!user.verified) return `<a class="banner" href="#/verify">${icon('cap')}<span><b>Fly next to other students</b><br><span class="muted sm">Verify your student status and we'll seat you next to another student.</span></span>${icon('arrow')}</a>`;
+    if (!user.verified) return `<a class="banner" href="#/verify" data-action="go-verify">${icon('cap')}<span><b>Fly next to other students</b><br><span class="muted sm">Verify your student status and we'll seat you next to another student.</span></span>${icon('arrow')}</a>`;
     if (!SZ.isAdult(user.dob, iso)) return `<div class="card empty sm">Student seating is open to verified students aged 18+.</div>`;
     return '';
   }
@@ -198,19 +217,33 @@
   function studentCard(t) {
     if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
     const planner = `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/0">See how students are seated (demo)</a>`;
-    if (!studentTrip(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
-    const lines = t.segments.map((s, i) => {
+    if (!studentEligible(t)) return studentGate(t.segments[0].dep) + `<div class="stack">${planner}</div>`;
+    const seated = studentTrip(t) && t.checkedIn ? t.segments.map((s, i) => {
       const p = seatPlan(t, i), nb = p.neighboursOf(p.students.find((x) => x.me));
-      return `<div class="sum-row"><span>${esc(s.number)} · ${s.from} → ${s.to}</span><b>${p.students.length - 1} other students</b></div>
-        ${t.checkedIn && nb.length ? `<p class="sm" style="margin:0 0 6px">Seat ${esc(s.seat)}, next to ${nb.map(who).join(' and ')}</p>` : ''}`;
-    }).join('');
+      return nb.length ? `<p class="sm" style="margin:0">${esc(s.number)} · seat ${esc(s.seat)}, next to ${nb.map(who).join(' and ')}</p>` : '';
+    }).join('') : '';
     return `
     <div class="card sz-card">
-      <div class="row between"><h3>${icon('cap')} Student seating</h3>${tick()}</div>
-      <p class="muted sm" style="margin:0 0 6px">You're a verified student, so we'll seat you next to another student, from your university when we can. Your seat is picked for you at check-in.</p>
-      ${lines}
+      ${verifiedLabel()}
+      ${t.checkedIn ? seated : t.studentSeat === undefined ? seatPoll(undefined, t.ref) : seatChoice(t.studentSeat, t.ref)}
       ${planner}
     </div>`;
+  }
+
+  /* Separate box under "Verified student" once the question is answered: green for yes, red for no. */
+  function seatChoice(yes, ref) {
+    const change = ref ? `data-action="seat-change" data-ref="${ref}"` : 'data-action="seat-change-form"';
+    return `<div class="sz-choice ${yes ? 'yes' : 'no'}">
+      <span>${yes ? 'Student seating selected · your seat will be assigned at check-in' : 'Standard seating selected'}</span>
+      <button type="button" class="link-btn" ${change}>Change</button></div>${ref ? '' : `<input type="hidden" name="szSeat" value="${yes ? 'yes' : 'no'}">`}`;
+  }
+
+  /* Yes / No question. With a ref it saves on the trip; without (booking form) it's a radio input. */
+  function seatPoll(answer, ref) {
+    const opt = (v, label) => ref
+      ? `<button type="button" class="poll-opt${answer === (v === 'yes') ? ' on' : ''}" data-action="seat-answer" data-ref="${ref}" data-v="${v}">${label}</button>`
+      : `<label class="poll-opt"><input type="radio" name="szSeat" value="${v}"><span>${label}</span></label>`;
+    return `<div class="poll"><p class="poll-q">${SEAT_QUESTION}</p><div class="poll-opts">${opt('yes', 'Yes')}${opt('no', 'No')}</div></div>`;
   }
 
   /* ---------- views ---------- */
@@ -358,7 +391,7 @@
         <div class="sum-row total"><span>Total</span><b>${money(fare + taxes)}</b></div></div>
       <form id="confirmForm" class="card form">
         <h3>Passengers</h3>${pax}
-        ${s.cabin === 'Economy' ? (studentOk(s.out.dep) ? `<div class="sz-note sm">${icon('cap')}<span>You're a verified student, so we'll seat you next to another student on this flight, from your university when we can.</span></div>` : studentGate(s.out.dep)) : ''}
+        ${s.cabin === 'Economy' ? (studentOk(s.out.dep) ? `<div class="sz-card card">${verifiedLabel()}<div class="sz-choice-wrap">${seatPoll()}</div></div>` : studentGate(s.out.dep)) : ''}
         <label class="field"><span>Contact email</span><input type="email" name="email" required value="${user ? esc(user.email) : ''}"></label>
         <label class="field"><span>Payment</span><input value="Demo card •••• 4242 (no real payment)" disabled></label>
         <button class="btn btn-primary block" type="submit">Confirm booking · ${money(fare + taxes)}</button>
@@ -399,7 +432,7 @@
         ${t.checkedIn
           ? t.segments.map((s, i) => `<a class="btn btn-primary block" href="#/boarding/${t.ref}/${i}">Boarding pass · ${s.from} → ${s.to}</a>`).join('')
           : canCheckIn(t)
-            ? `<button class="btn btn-primary block" data-action="checkin" data-ref="${t.ref}">${t.cabin === 'Economy' ? 'Check in & choose seat' : 'Check in online'}</button>`
+            ? `<button class="btn btn-primary block" data-action="checkin" data-ref="${t.ref}">${studentTrip(t) ? 'Check in · get your seat' : t.cabin === 'Economy' ? 'Check in & choose seat' : 'Check in online'}</button>`
             : `<div class="card empty sm">Online check-in opens 48 hours before departure.</div>`}
         <button class="btn btn-danger block" data-action="cancel" data-ref="${t.ref}">Cancel booking</button></div>` : ''}
     </div>`;
@@ -606,17 +639,18 @@
   };
 
   views.verify = () => {
+    const back = vs.returnTo ? backLink(vs.returnTo, 'Back to your booking') : backLink('#/profile', 'Profile');
     const done = user.verified || vs.step === 'done';
     if (done) {
       const v = user.verified;
-      return `<div class="narrow">${backLink('#/profile', 'Profile')}
+      return `<div class="narrow">${back}
         <div class="card verify-done">${tick('tick-xl')}<h1>You're verified</h1>
           <p class="muted">${esc(user.firstName)} ${esc(user.lastName)} now has a green tick next to their name.${v ? '<br>Verified with <b>' + esc(v.email) + '</b>.' : ''}</p>
-          <a class="btn btn-primary block" href="#/home">Back to home</a></div></div>`;
+          <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">${vs.returnTo ? 'Back to your booking' : 'Back to home'}</a></div></div>`;
     }
     const err = vs.msg ? `<p class="err" role="alert">${esc(vs.msg)}</p>` : '';
     if (vs.step === 'code') {
-      return `<div class="narrow">${backLink('#/profile', 'Profile')}
+      return `<div class="narrow">${back}
         <h1>Enter your code</h1>
         <p class="muted">We sent a 6-digit code to <b>${esc(vs.email)}</b>. It expires in 10 minutes.</p>
         ${vs.demo ? `<div class="card demo-note"><b>Demo mode:</b> no email server is connected, so your code is shown here.<div class="demo-code mono">${esc(vs.demoCode)}</div></div>` : ''}
@@ -628,7 +662,7 @@
           <button class="btn btn-ghost" type="button" data-action="verify-change">Change email</button></div>
         </form></div>`;
     }
-    return `<div class="narrow">${backLink('#/profile', 'Profile')}
+    return `<div class="narrow">${back}
       <h1>Verify student status</h1>
       <p class="muted">Enter your university email. We'll send a 6-digit code — any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
       <form id="verifyEmailForm" class="card form" novalidate>
@@ -829,6 +863,17 @@
     unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
+    'seat-answer'(el) {
+      const t = findTrip(el.dataset.ref);
+      t.studentSeat = el.dataset.v === 'yes';
+      seatSel.key = ''; saveTrips(); render();
+      if (t.studentSeat) seatYesModal();
+    },
+    'seat-change'(el) { delete findTrip(el.dataset.ref).studentSeat; saveTrips(); render(); },
+    'seat-change-form'(el) { el.closest('.sz-card').querySelector('.sz-choice-wrap').innerHTML = seatPoll(); },
+    'go-verify'() { vs.returnTo = location.hash; },
+    'modal-close'() { $('.modal-bg').remove(); },
+    noop() {},
     soon(el) { toast(`${el.dataset.label}: placeholder for the hackathon build.`); },
   };
 
@@ -861,6 +906,7 @@
         pax: Array.from({ length: s.pax }, (_, i) => ({ first: f.get('first' + i).trim(), last: f.get('last' + i).trim() })),
         total: Math.round(fare * 1.14), segments: [mk(s.out), ...(s.back ? [mk(s.back)] : [])],
       };
+      if (f.get('szSeat')) t.studentSeat = f.get('szSeat') === 'yes';
       trips.push(t); saveTrips(); retrieved.add(ref);
       search.out = null; search.back = null; search.step = 'out'; search.to = '';
       toast(`Booked! Reference ${ref}`);
@@ -903,6 +949,16 @@
       $('#timetableOut').innerHTML = f.get('from') === f.get('to') ? '<div class="card empty">Choose two different airports.</div>' :
         fl.map((x) => `<div class="card row between"><b>${x.number}</b><span>${fmtTime(x.dep)} → ${fmtTime(x.arr)}</span><span class="muted sm">${dur(x.durMin)} · ${x.stops ? '1 stop' : 'Nonstop'}</span></div>`).join('');
     }
+  });
+
+  document.addEventListener('change', (e) => {
+    if (e.target.name !== 'szSeat' || e.target.type !== 'radio') return;
+    const yes = e.target.value === 'yes';
+    e.target.closest('.sz-choice-wrap').innerHTML = seatChoice(yes);
+    if (yes) seatYesModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('.modal-bg')) $('.modal-bg').remove();
   });
 
   document.addEventListener('input', (e) => {
@@ -984,6 +1040,7 @@
       const v = { email: vs.email, at: toISO(new Date()) };
       store.set('verified', v); user.verified = v; vs.step = 'done'; vs.msg = '';
       toast('Student status verified');
+      if (vs.returnTo) { const to = vs.returnTo; vs.returnTo = ''; location.hash = to; return; }
     } else vs.msg = msg;
     render();
   }
