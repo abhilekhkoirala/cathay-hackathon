@@ -19,7 +19,7 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 # Every top-level page, style and script (new server modules are picked up automatically), the seating service
 # (seating/), plus npm metadata. Never .env, data/ or aws/: secrets and the database stay on each machine.
-FILES=(package.json package-lock.json *.js *.html *.css seating)
+FILES=(package.json package-lock.json *.js *.html *.css seating images)
 envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 # Server settings copied from your local .env (only these keys; never SMTP or AWS secrets).
 SERVER_ENV="$(for k in OAG_KEY MODERATORS VERIFIERS DOC_ENCRYPTION_KEY STUDENT_POLICY_VERSION STUDENT_AUTO_APPROVE SEAT_OPS ZONE_ROWS_WIDE ZONE_ROWS_NARROW ZONE_RELEASE_HOURS; do printf '%s=%s\n' "$k" "$(envval $k)"; done)"

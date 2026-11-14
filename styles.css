@@ -655,3 +655,8 @@ a.sz-choice{text-decoration:none}
 .cm-soon .ico{color:var(--brand);margin-top:2px}.cm-soon p{margin:4px 0 0}
 @media (max-width:900px){.cm-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.cm-grid{grid-template-columns:1fr}.cm-feature h2{font-size:20px}}
+
+/* offer cards with city photos */
+.offer.has-photo{position:relative;overflow:hidden;text-shadow:0 1px 8px rgba(0,0,0,.45);transition:transform .25s ease,box-shadow .25s ease}
+.offer.has-photo:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(6,30,22,.28)}
+.photo-credit{position:absolute;right:10px;bottom:6px;font-size:9.5px;opacity:.7;letter-spacing:.01em;text-shadow:none}

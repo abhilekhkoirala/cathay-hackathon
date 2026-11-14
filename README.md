@@ -305,3 +305,17 @@ DEPLOY.md     step-by-step AWS install + deploy guide
 ## Ideas to extend
 
 Message history for the flight chat (it is live and multi-person now, see DEPLOY.md), student-only fares behind the green tick, live flight-status API, PWA install.
+
+## Photo credits
+
+City photos on the Offers page (`images/cities/`, resized) are from Wikimedia Commons:
+
+| City | Photo | Author | Licence |
+|---|---|---|---|
+| Singapore | [Singapore Marina Bay Dusk 2018-02-27](https://commons.wikimedia.org/wiki/File:Singapore_Marina_Bay_Dusk_2018-02-27.jpg) | Benh LIEU SONG | CC BY-SA 4.0 |
+| Tokyo | [Tokyo Tower, Minato City](https://commons.wikimedia.org/wiki/File:Tokyo_Tower,_Minato_City.jpg) | David Kernan | CC BY 4.0 |
+| Seoul | [Seoul night pano (cropped)](https://commons.wikimedia.org/wiki/File:Seoul-night-pano-cropped.jpg) | KLuwak | CC BY-SA 3.0 |
+| Bangkok | [Bangkok skytrain sunset](https://commons.wikimedia.org/wiki/File:Bangkok_skytrain_sunset.jpg) | Diliff | CC BY-SA 3.0 |
+| Sydney | [Sydney Opera House and Harbour Bridge Dusk (3)](https://commons.wikimedia.org/wiki/File:Sydney_Opera_House_and_Harbour_Bridge_Dusk_(3)_2019-06-21.jpg) | Benh LIEU SONG | CC BY-SA 4.0 |
+| London | [Tower Bridge London Dusk Feb 2006](https://commons.wikimedia.org/wiki/File:Tower_Bridge_London_Dusk_Feb_2006.jpg) | Diliff | CC BY-SA 3.0 |
+

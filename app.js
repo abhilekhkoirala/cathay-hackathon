@@ -1085,10 +1085,25 @@
     </div>`;
   };
 
+  /* City photos from Wikimedia Commons (free licences that require the author's name, shown on each card). */
+  const CITY_PHOTOS = {
+    SIN: ['sin.jpg', 'Benh LIEU SONG', 'CC BY-SA 4.0', '50% 55%'],
+    NRT: ['nrt.jpg', 'David Kernan', 'CC BY 4.0', '50% 50%'],
+    ICN: ['icn.jpg', 'KLuwak', 'CC BY-SA 3.0', '45% 50%'],
+    BKK: ['bkk.jpg', 'Diliff', 'CC BY-SA 3.0', '50% 60%'],
+    SYD: ['syd.jpg', 'Benh LIEU SONG', 'CC BY-SA 4.0', '45% 50%'],
+    LHR: ['lhr.jpg', 'Diliff', 'CC BY-SA 3.0', '50% 55%'],
+  };
   views.offers = () => {
-    const cards = ['SIN', 'NRT', 'ICN', 'BKK', 'SYD', 'LHR'].map((c, i) => `
-      <button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})">
-        <span>From Hong Kong</span><b>${esc(city(c))}</b><span>Fares from ${money(basePrice('HKG', c))}</span></button>`).join('');
+    const cards = ['SIN', 'NRT', 'ICN', 'BKK', 'SYD', 'LHR'].map((c, i) => {
+      const ph = CITY_PHOTOS[c];
+      const bg = ph ? `background-image:linear-gradient(180deg,rgba(6,30,22,.05) 0%,rgba(6,30,22,.35) 45%,rgba(6,30,22,.85) 100%),url(images/cities/${ph[0]});background-size:cover;background-position:${ph[3]}`
+        : `background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})`;
+      return `
+      <button class="offer has-photo" data-action="offer" data-code="${c}" style="${bg}">
+        <span>From Hong Kong</span><b>${esc(city(c))}</b><span>Fares from ${money(basePrice('HKG', c))}</span>
+        ${ph ? `<small class="photo-credit">Photo: ${esc(ph[1])} · ${esc(ph[2])} · Wikimedia Commons</small>` : ''}</button>`;
+    }).join('');
     const verify = !user ? '' : user.verified
       ? `<div class="verified-pass" role="status">
           <span class="vp-badge">${icon('cap')}<i>${icon('check')}</i></span>
