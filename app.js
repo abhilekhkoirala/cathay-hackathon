@@ -193,7 +193,8 @@
     toast(signup ? `Welcome, ${r.user.firstName}! Your member number is ${r.user.memberId}.` : `Signed in as ${r.user.firstName}`);
     location.hash = '#/home'; render();
     fetchVerification(true);
-    if (!user.verified && !(user.student && user.student.status && user.student.status !== 'not_submitted')) setTimeout(studentPromo, 600); // guide new and returning members towards student verification
+    if (signup && user.invitedBy) setTimeout(() => inviteInfo('invited'), 600); // invited friends first learn how the invite bonus works
+    else if (!user.verified && !(user.student && user.student.status && user.student.status !== 'not_submitted')) setTimeout(studentPromo, 600); // guide new and returning members towards student verification
   }
   function signOutLocal(msg) {
     if (session() && !isLocalAccount()) authCall('POST', '/auth/logout', {});
@@ -360,7 +361,7 @@
       }));
       Object.values(best).forEach(({ t, s }) => {
         if (new Date(s.dep) < new Date()) return;
-        const id = liveId(s), body = paxBody(t, s, studentTrip(t) && !t.checkedIn ? null : s.seat);
+        const id = liveId(s), body = paxBody(t, s, studentTrip(t) && !t.checkedIn ? s.pick || null : s.seat);
         const k = JSON.stringify(body);
         if (LIVE.sent[id] === k) return;
         LIVE.sent[id] = k;
@@ -374,6 +375,26 @@
     if (!LIVE.on || LIVE.state[id] || LIVE.sent['ensure' + id]) return;
     LIVE.sent['ensure' + id] = '1';
     liveCall('/flights/' + id + '/ensure', { seg: segOut(s) }).then((r) => { if (r.ok) { liveWatch(id); liveRerender(); } });
+  }
+  /* Nearby dates (±3 days) whose flights already have the most students (bands only: 3+, 5+, 10+). Students only. */
+  function studentDates(from, to, date) {
+    if (!LIVE.on || !isStudent()) return null;
+    const k = [from, to, date].join('|');
+    LIVE.sdates = LIVE.sdates || {};
+    if (!(k in LIVE.sdates)) {
+      LIVE.sdates[k] = null;
+      liveCall(`/student-dates?from=${from}&to=${to}&date=${date}`).then((r) => { LIVE.sdates[k] = r.ok ? r.dates : []; liveRerender(); });
+    }
+    return LIVE.sdates[k];
+  }
+  function studentDatesCard(leg) {
+    const list = studentDates(leg.from, leg.to, leg.date);
+    if (!list || !list.length) return '';
+    return `<div class="card sd-card">
+      <div class="sd-head">${icon('cap')}<div><b>Fly with other students</b><span class="muted sm">Dates near yours with the most students already booked. Counts only: never who they are.</span></div></div>
+      <div class="sd-chips">${list.map((d) => `<button class="sd-chip${d.date === leg.date ? ' on' : ''}" data-action="set-date" data-date="${d.date}">
+        <span>${fmtDate(d.date + 'T12:00', { weekday: 'short', day: 'numeric', month: 'short' })}</span><b>${esc(d.number)} · ${fmtTime(d.dep)}</b><small>${icon('cap')} ${esc(d.students)} students</small></button>`).join('')}</div>
+    </div>`;
   }
   /* Real flights for a search: OAG via the server, cached per search; simulated until it answers. */
   function flightsFor(from, to, date, cabin) {
@@ -419,7 +440,7 @@
       if (mine) {
         const myUni = SZ.universityFromEmail(user.verified.email);
         real = real.map((x) => (x.me ? { ...x, uni: myUni, shownUni: myUni } : x));
-        if (!real.some((x) => x.me)) real.push({ id: pid, me: true, name: user.firstName, uni: myUni, uniTag: uniTagOf(myUni), shownUni: myUni, year: '', field: '', locked: t.checkedIn ? s.seat : null });
+        if (!real.some((x) => x.me)) real.push({ id: pid, me: true, name: user.firstName, uni: myUni, uniTag: uniTagOf(myUni), shownUni: myUni, year: '', field: '', locked: t.checkedIn ? s.seat : s.pick || null });
       } else real = real.filter((x) => !x.me);
       const sold = st.sales.concat(st.pax.filter((x) => !x.student && x.seat && x.id !== pid && (x.cabin || 'Economy') === 'Economy').map((x) => x.seat));
       if (!mine && s.seat && t.cabin === 'Economy') sold.push(s.seat);
@@ -430,7 +451,7 @@
     }
     if (LIVE.on) liveEnsure(s);
     const me = studentTrip(t)
-      ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : null }
+      ? { id: 'me', me: true, name: user.firstName, uni: SZ.universityFromEmail(user.verified.email), year: '', field: '', locked: t.checkedIn ? s.seat : s.pick || null }
       : null;
     const sold = [...(store.get('sales', {})[key] || [])];
     if (!me && s.seat && t.cabin === 'Economy') sold.push(s.seat);
@@ -531,7 +552,11 @@
   /* spRate: student points per Asia Mile a normal member would earn. spConvert: share converted to
    * Asia Miles at graduation (rest expires). With ~85% of students converting, Cathay pays
    * 1.5 × 0.70 × 0.85 ≈ 0.89 of normal miles while students get 1.05× (break-even up to 95% converting). */
-  const PERKS = { referralMiles: 1000, referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500 };
+  const PERKS = { referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7, welcome: 1500, seatSp: 1000, seatMiles: 2500, inviteAlpha: 0.2, inviteStudentShare: 0.25 };
+  /* Invites: when the invited friend makes their first booking (cancelled bookings don't count), BOTH sides get a bonus.
+   * A non-student side gets inviteAlpha (20%) of the Asia Miles a normal member earns on that booking, as Asia Miles.
+   * A student side gets inviteStudentShare (1/4) of the student points that booking earns (1.5 per mile), as student points
+   * (0.375 points per mile: students come out ahead). Up to referralCap friends. */
   const EARN_RATE = { Economy: 0.5, 'Premium Economy': 0.75, Business: 1.25, First: 1.5 };
   /* Asia Miles a normal member would earn on a flight (share of the distance in miles, by cabin). */
   const flightMiles = (seg, cabin) => Math.round((distanceKm(seg.from, seg.to) * 0.6214 * (EARN_RATE[cabin] || 0.5)) / 10) * 10;
@@ -546,7 +571,7 @@
   ]; // Economy trips only: premium cabins already include them.
   const spSpent = (p) => (p.redeemed || []).reduce((n, r) => n + r.pts, 0) + (p.seatBuys || []).filter((b) => b.with === 'sp').reduce((n, b) => n + b.amount, 0);
   const milesSpent = (p) => (p.seatBuys || []).filter((b) => b.with === 'miles').reduce((n, b) => n + b.amount, 0);
-  const spLeft = (p) => (p.graduated ? 0 : (p.welcome || 0) + (p.sp || 0) - spSpent(p));
+  const spLeft = (p) => (p.graduated ? 0 : (p.welcome || 0) + (p.sp || 0) + inviteSp() - spSpent(p));
   /* Pay for a reward on a trip with student points; returns an error message or ''. */
   function redeem(t, rw) {
     const p = perks();
@@ -583,17 +608,34 @@
     if (!user || !session() || isLocalAccount() || Date.now() - (fetchRefs.at || 0) < 3000) return;
     fetchRefs.at = Date.now();
     authCall('GET', '/me/referrals').then((r) => {
-      if (!r.ok || JSON.stringify(r.referrals) === JSON.stringify(refsCache)) return;
-      refsCache = r.referrals; rerender();
+      if (!r.ok) return;
+      const next = { referrals: r.referrals || [], invited: r.invited || null };
+      if (JSON.stringify(next) === JSON.stringify(refsCache)) return;
+      refsCache = next; rerender();
     });
   }
-  /* Miles earned through student perks: friends who verified AND flew (capped), and the graduation gift. */
+  /* Miles a normal member earns on a whole booking. */
+  const bookingMiles = (b) => b.segments.reduce((n, s) => n + flightMiles(s, b.cabin), 0);
+  /* My side of an invite bonus for one booking: student points if I'm a verified student, Asia Miles otherwise. */
+  const inviteBonus = (b) => (isStudent()
+    ? { amount: Math.round(bookingMiles(b) * PERKS.spRate * PERKS.inviteStudentShare), unit: 'pts' }
+    : { amount: Math.round(bookingMiles(b) * PERKS.inviteAlpha), unit: 'miles' });
+  function inviteCredits() {
+    if (!refsCache) return [];
+    const out = [];
+    refsCache.referrals.slice(0, PERKS.referralCap).forEach((r) => {
+      if (r.booking) out.push({ ...inviteBonus(r.booking), title: `Friend ${r.name} booked their first flight`, date: r.booking.bought, note: 'Invite bonus' });
+    });
+    const inv = refsCache.invited;
+    if (inv && inv.booking) out.push({ ...inviteBonus(inv.booking), title: 'Your first flight with an invite', date: inv.booking.bought, note: 'Invite bonus' });
+    return out;
+  }
+  const inviteSp = () => inviteCredits().filter((c) => c.unit === 'pts').reduce((n, c) => n + c.amount, 0);
+  /* Miles from perks: invite bonuses (non-student side) and the graduation gift. */
   function perkMiles(p = perks()) {
-    const refs = (refsCache || []).filter((r) => r.verified);
-    const flown = Math.min(PERKS.referralCap, refs.filter((r) => r.flown).length);
     return {
-      credited: flown * PERKS.referralMiles + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
-      pending: Math.max(0, Math.min(PERKS.referralCap - flown, refs.filter((r) => !r.flown).length)) * PERKS.referralMiles,
+      credited: inviteCredits().filter((c) => c.unit === 'miles').reduce((n, c) => n + c.amount, 0) + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
+      pending: 0,
     };
   }
   const asiaMiles = () => (user.asiaMiles || 0) + perkMiles().credited - milesSpent(perks());
@@ -605,7 +647,7 @@
     if (p.welcome) out.push({ title: 'Student welcome bonus', date: day(p.welcomeAt), note: 'Verified student', pts: p.welcome });
     (p.redeemed || []).forEach((r) => out.push({ title: rewardName(r.id), date: day(r.at), note: 'Trip ' + r.ref, pts: -r.pts }));
     (p.seatBuys || []).forEach((b) => out.push({ title: 'Seat choice', date: day(b.at), note: 'Trip ' + b.ref, pts: -b.amount, unit: b.with === 'miles' ? 'miles' : 'pts' }));
-    (refsCache || []).filter((r) => r.verified && r.flown).slice(0, PERKS.referralCap).forEach((r) => out.push({ title: `Friend ${r.name} joined and flew`, date: day(r.joined), note: 'Invite bonus', pts: PERKS.referralMiles, unit: 'miles' }));
+    inviteCredits().forEach((c) => out.push({ title: c.title, date: day(c.date), note: c.note, pts: c.amount, unit: c.unit }));
     if (p.graduated) out.push({ title: 'Graduation gift', date: day(p.graduated), note: 'Bonus + converted points', pts: PERKS.gradMiles + (p.gradConverted || 0), unit: 'miles' });
     return out.sort((a, b) => b.date.localeCompare(a.date));
   }
@@ -832,7 +874,7 @@
           ['gift', 'Welcome bonus', `${PERKS.welcome.toLocaleString()} student points when you verify: enough to choose your seat on an Economy Light fare.`],
           ['up', 'Student points', 'Earn 1.5 student points per mile on your flights. Spend them on Wi-Fi, seats and lounges; 70% of what is left becomes Asia Miles at graduation.'],
           ['plug', 'Free travel adapter', "On your first flight to your university's country, handed to you by the crew. Once per study programme."],
-          ['share', 'Invite friends', `When a friend joins with your link, verifies and flies, you get ${PERKS.referralMiles.toLocaleString()} Asia Miles.`],
+          ['share', 'Invite friends', `When a friend joins with your link and books their first flight, you both get a bonus: ${Math.round(PERKS.spRate * PERKS.inviteStudentShare * 1000) / 1000} student points per mile for students, ${Math.round(PERKS.inviteAlpha * 100)}% of the flight's Asia Miles otherwise.`],
           ['cap', 'Graduation gift', `One tier up for ${PERKS.boostMonths} months and ${PERKS.gradMiles.toLocaleString()} bonus miles, for your first work trips.`],
           ['chat', 'Student flight chat', 'A moderated group chat for verified students on your flight, open 7 days before departure. Group only, no private messages.'],
           ['tag', 'Student card (proposed)', 'A student card with our card partner: no income requirement, earns student points on everyday spending, upgrades at graduation. Concept only, not available.'],
@@ -870,6 +912,61 @@
     </div>`;
   };
 
+  /* ---------- invites ---------- */
+  const EXAMPLE = { cabin: 'Economy', segments: [{ from: 'HKG', to: 'LHR' }] };
+  function inviteCard() {
+    fetchRefs();
+    const refs = (refsCache || {}).referrals || [];
+    const rows = refs.map((r, i) => {
+      const b = r.booking && i < PERKS.referralCap ? inviteBonus(r.booking) : null;
+      return `<div class="perk-row"><div><b>Friend ${esc(r.name)}</b><div class="muted sm">Joined ${fmtDate(r.joined + 'T12:00', { day: 'numeric', month: 'short' })} · ${r.booking ? `booked ${esc(r.booking.segments[0].from)} → ${esc(r.booking.segments[r.booking.segments.length - 1].to)}` : 'no booking yet'}</div></div>
+        ${b ? `<span class="badge ok">+${b.amount.toLocaleString()} ${b.unit === 'pts' ? 'student points' : 'miles'}</span>` : '<span class="badge">Waiting for first booking</span>'}</div>`;
+    }).join('') || (isLocalAccount() ? '<p class="muted sm">Invites need an online account (this one is stored on this device only).</p>' : '<p class="muted sm">No friends have joined with your link yet.</p>');
+    return `<div class="card perk" id="inviteCard">
+      <div class="perk-head">${icon('share')}<div><h3>Invite friends</h3><p class="muted sm">When a friend joins with your link and books their first flight, you both get a bonus. Up to ${PERKS.referralCap} friends. <button type="button" class="link-btn" data-action="invite-info" data-who="inviter">How it works</button></p></div></div>
+      <div class="ref-link"><span class="mono">${esc(refLink())}</span><button class="btn btn-primary sm-btn" data-action="ref-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>
+      ${rows}
+    </div>`;
+  }
+  /* Explains the invite rules. who: 'inviter' (my link) or 'invited' (I came through a friend's link). */
+  function inviteInfo(who) {
+    const miles = bookingMiles(EXAMPLE);
+    const stu = Math.round(miles * PERKS.spRate * PERKS.inviteStudentShare), non = Math.round(miles * PERKS.inviteAlpha);
+    document.querySelector('.modal-bg')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <div class="modal promo" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="invTitle">
+          <div class="promo-hero"><span class="promo-badge">${icon('share')} Invite friends</span>
+            <h2 id="invTitle">${who === 'invited' ? 'A friend invited you' : 'Fly together, earn together'}</h2>
+            <p>${who === 'invited' ? 'Book your first Cathay flight with this account and you and your friend both get a bonus.' : 'Share your link. When a friend joins with it and books their first Cathay flight, you both get a bonus.'}</p></div>
+          <ul class="promo-list">
+            <li>${icon('check')}<span><b>As soon as the first flight is booked.</b> If that booking is cancelled, the bonus is removed.</span></li>
+            <li>${icon('plane')}<span><b>Not a student:</b> ${Math.round(PERKS.inviteAlpha * 100)}% of the Asia Miles that flight earns, as Asia Miles.</span></li>
+            <li>${icon('cap')}<span><b>Verified student:</b> ¼ of the student points that flight earns (students earn ${PERKS.spRate} student points per mile), as student points. That's more: ${PERKS.spRate * PERKS.inviteStudentShare} points per mile.</span></li>
+            <li>${icon('info')}<span><b>Example:</b> Hong Kong → London in Economy earns about ${miles.toLocaleString()} miles. Non-student: +${non.toLocaleString()} Asia Miles. Student: +${stu.toLocaleString()} student points.</span></li>
+            ${who === 'invited' ? '' : `<li>${icon('share')}<span>Up to ${PERKS.referralCap} friends. Each side gets their own bonus.</span></li>`}
+          </ul>
+          ${who === 'invited' && !user ? '<a class="btn btn-primary block" href="#/signup" data-action="modal-close">Create my account</a>' : '<button class="btn btn-primary block" data-action="modal-close">Got it</button>'}
+          <div style="height:16px"></div>
+        </div>
+      </div>`);
+    $('.modal.promo .btn').focus();
+  }
+  /* The first time the invite card scrolls into view, explain why inviting is worth it (once per account). */
+  let inviteObs = null;
+  function watchInviteCard() {
+    if (inviteObs) { inviteObs.disconnect(); inviteObs = null; }
+    const card = $('#inviteCard');
+    if (!card || !user || perks().inviteInfoSeen || !('IntersectionObserver' in window)) return;
+    inviteObs = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting) || document.querySelector('.modal-bg')) return;
+      inviteObs.disconnect(); inviteObs = null;
+      const p = perks(); p.inviteInfoSeen = true; savePerks(p);
+      inviteInfo('inviter');
+    }, { threshold: 0.6 });
+    inviteObs.observe(card);
+  }
+
   /* Overview: book a flight without leaving the page first. */
   function quickBookCard() {
     return `<form id="quickBook" class="card quick-book">
@@ -902,6 +999,7 @@
         <p class="sub">Earn on every Cathay flight and spend on flights, upgrades and more.</p></div></header>
       ${milesCard()}
       ${studentBanner()}
+      ${inviteCard()}
       <div class="sect-head"><h3>Recent activity</h3></div>
       <div class="stack" style="margin-top:0">${activity().length ? activity().map(activityRow).join('') : activityRow()}</div>
     </div>`);
@@ -979,6 +1077,7 @@
       ${!outbound ? `<div class="card chosen sm">Outbound selected: <b>${s.out.number}</b> ${fmtDate(s.out.dep)} ${fmtTime(s.out.dep)}</div>` : ''}
       <div class="days">${strip}</div>
       ${srcNote}
+      ${studentDatesCard(leg)}
       <div class="flights">
         ${(flights || []).map((f, i) => `
         <div class="card flight">
@@ -989,6 +1088,7 @@
           </div>
           <div class="f-side">
             <div class="muted sm">${f.number} · ${f.aircraft}</div>
+            ${f.students && isStudent() && s.cabin === 'Economy' ? `<div class="sd-badge">${icon('cap')} ${esc(f.students)} students on this flight</div>` : ''}
             ${s.cabin === 'Economy'
               ? `<div class="fares">${Object.entries(FARES).map(([name, fr]) => `<button class="fare" data-action="pick" data-idx="${i}" data-fare="${name}" title="${esc(fr.note)}"><span>Economy ${name}</span><b>${money(Math.round(f.price * fr.mult) * s.pax)}</b><small>${fr.seat === 'paid' ? 'Seat choice extra' : 'Seat choice included'}</small></button>`).join('')}</div>`
               : `<div class="price">${money(f.price * s.pax)}</div><button class="btn btn-primary sm-btn" data-action="pick" data-idx="${i}">Select</button>`}
@@ -1150,7 +1250,8 @@
                 : `<p class="sm" style="margin:0">No other student could be seated next to you yet. We keep trying until check-in closes.</p>`}
               <p class="muted sm" style="margin:8px 0 0">${p.students.length - 1} other students are on this flight. Names are never shown; universities only when a student chooses to share theirs.</p>
             </div>
-            <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">Check in · seat ${mine}</button></div>
+            <div class="seat-bar"><button id="seatConfirm" class="btn btn-primary block" data-action="confirm-seat">Check in · seat ${mine}</button>
+              ${studentCanPick(t, i) ? `<a class="btn btn-ghost block sm-btn" href="#/planner/${t.ref}/${i}">Economy Flex: choose a different seat</a>` : ''}</div>
           </div>
         </div>
       </div>`;
@@ -1197,6 +1298,8 @@
    * hover shows their university only if they chose to share it. Not offered on Economy Light. */
   const planner = { key: '', log: [], moved: new Set() };
   const plannerAllowed = (t, i) => t.cabin === 'Economy' && seatRule(t.cabin, t.segments[i].fare || t.fare) !== 'paid';
+  /* Economy Flex includes seat choice: a student who said yes may pick their own seat here (until check-in). */
+  const studentCanPick = (t, i) => studentTrip(t) && !t.checkedIn && (t.segments[i].fare || t.fare) === 'Flex';
   views.planner = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx || 0), s = t && t.segments[i];
     if (!t || !s) return notFound();
@@ -1207,13 +1310,14 @@
     if (p.live) { planner.log = p.live.log.map(esc); planner.moved = new Set(p.moved.map((m) => p.seatOf[m.id])); }
     const groupOf = {};
     p.groups.forEach((g) => g.seats.forEach((id) => { groupOf[id] = g; }));
+    const canPick = studentCanPick(t, i);
     const cell = (id) => {
       const x = p.at[id], moved = planner.moved.has(id) ? ' moved' : '';
       if (x) {
         const g = groupOf[id], kind = x.me ? 'mine' : g.members.length < 2 ? 'solo' : g.sameUni ? 'stu' : 'mix';
         return seatEl(id, kind + moved, x.me ? 'You' : '★', '', x.me ? ', you' : ', Student · ' + uniLabel(x), x.me ? 'You' + (x.locked ? ' · checked in' : ' · planned seat') : 'Student · ' + uniLabel(x) + (x.locked ? ' · checked in' : ''));
       }
-      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', passenger') : seatEl(id, 'free', '', '', ', free');
+      return p.paid.has(id) ? seatEl(id, 'taken', '', '', ', passenger') : seatEl(id, 'free', '', canPick ? 'plan-pick' : '', ', free');
     };
     const multi = p.groups.filter((g) => g.members.length > 1);
     const alone = p.students.filter((x) => p.seatOf[x.id] && !p.neighboursOf(x).length).length;
@@ -1227,6 +1331,8 @@
       <div class="seat-layout">
         <div>${legend([['lg-stu', 'Students, same university'], ['lg-mix', 'Students, mixed'], ['lg-solo', 'Student alone'], ['lg-mine', 'You'], ['lg-taken', 'Other passenger'], ['lg-free', 'Free']])}${seatGrid(c, cell)}</div>
         <div class="seat-side">
+          ${canPick ? `<div class="card sz-card sm"><b>${icon('seat')} Economy Flex: choose your own seat</b>
+            <span class="muted">Tap any free seat to take it (students near you are shown as ★). ${s.pick ? `You chose <b>${esc(s.pick)}</b>. <button type="button" class="link-btn" data-action="plan-auto">Go back to automatic seating</button>` : 'Or keep the seat we chose for you, next to other students.'}</span></div>` : ''}
           <div class="card sm"><b>Real bookings only.</b>
             <span class="muted">Verified students who said yes are seated in groups of 2–3 side by side, from the same university when possible. Every other seat stays on sale: if another passenger chooses a seat planned for a student, only that student's group moves. Hover a ★ to see a university, if the student chose to share it.</span></div>
           <div class="card plan-stats">
@@ -1397,7 +1503,7 @@
     return `<div class="narrow vf-page">${back}${vStepper(cur)}
       <h1>Verify student status</h1>
       ${note}
-      ${user.invitedBy ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(user.invitedBy)}). Verify and you'll both get ${PERKS.referralMiles.toLocaleString()} miles after your first flight.</span></div>` : ''}
+      ${user.invitedBy ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(user.invitedBy)}). When you book your first flight you both get a bonus, and as a verified student yours comes as student points (¼ of the flight's student points).</span></div>` : ''}
       <p class="muted">Two quick steps: confirm your <b>university email</b> with a one-time code, then upload your <b>student ID</b>. Any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
       <form id="verifyEmailForm" class="card form" novalidate>
         <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email || (sv && sv.email) || '')}" required autocomplete="email"></label>
@@ -1594,7 +1700,7 @@
       <div class="narrow">
         <h1 class="mob-only">Create an account</h1>
         <form id="signupForm" class="card form">
-          ${invite ? `<div class="sz-choice yes"><span>${icon('share')} Invited by a friend (${esc(invite)}). Verify as a student and fly: you both get ${PERKS.referralMiles.toLocaleString()} miles.</span></div>` : ''}
+          ${invite ? `<div class="sz-choice yes"><span>${icon('share')} Invited by a friend (${esc(invite)}). Book your first flight and you both get a bonus. <button type="button" class="link-btn" data-action="invite-info" data-who="invited">How it works</button></span></div>` : ''}
           <div class="two">
             <label class="field"><span>Given name</span><input name="firstName" autocomplete="given-name" maxlength="30" required></label>
             <label class="field"><span>Family name</span><input name="lastName" autocomplete="family-name" maxlength="40" required></label>
@@ -1614,7 +1720,7 @@
   /* Student perks section of the Points & rewards page. */
   function perksBody() {
     if (!user.verified) return studentGate(toISO(new Date()));
-    const p = perks(), m = perkMiles(p), refs = refsCache || [];
+    const p = perks(), m = perkMiles(p);
     fetchRefs();
     const country = studyCountry(), plug = SZ.countryPlug(country), at = adapterTrip(p), claimed = adapterClaimed(p);
     const adapterRow = (t, right) => `<div class="perk-row"><div><b>${esc(city(t.segments[0].from))} → ${esc(city(t.segments[0].to))}</b><div class="muted sm">${fmtDate(t.segments[0].dep, { day: 'numeric', month: 'short', year: 'numeric' })} · Type ${esc(plug)}</div></div>${right}</div>`;
@@ -1622,9 +1728,6 @@
       : claimed ? adapterRow(at, '<span class="badge ok">Claimed · collect on board</span>')
       : at ? adapterRow(at, `<button class="btn btn-primary sm-btn" data-action="claim-adapter" data-ref="${at.ref}">Claim free</button>`)
       : `<p class="muted sm">It will appear here when you book your first flight to ${esc(countryName(country))}.</p>`;
-    const friends = refs.map((r) => `<div class="perk-row"><div><b>Friend ${esc(r.name)}</b><div class="muted sm">Joined ${fmtDate(r.joined + 'T12:00', { day: 'numeric', month: 'short' })} · ${!r.verified ? 'not verified yet' : r.flown ? 'verified and flew' : 'verified · first flight pending'}</div></div>
-      ${r.verified && r.flown ? `<span class="badge ok">+${PERKS.referralMiles.toLocaleString()} miles</span>` : '<span class="badge">Pending</span>'}</div>`).join('')
-      || (isLocalAccount() ? '<p class="muted sm">Invites need an online account (this one is stored on this device only).</p>' : '<p class="muted sm">No friends have joined with your link yet.</p>');
     const boost = gradBoostUntil(p), nextTier = SZ.tierUp(user.tier);
     const gradMonth = p.gradMonth || (user.verified.until || '').slice(0, 7);
     return `
@@ -1643,11 +1746,7 @@
         ${adapter}
       </div>
 
-      <div class="card perk">
-        <div class="perk-head">${icon('share')}<div><h3>Invite friends</h3><p class="muted sm">When a friend verifies as a student with your link and takes their first flight, you both get ${PERKS.referralMiles.toLocaleString()} miles. Up to ${PERKS.referralCap} friends a year.</p></div></div>
-        <div class="ref-link"><span class="mono">${esc(refLink())}</span><button class="btn btn-primary sm-btn" data-action="ref-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>
-        ${friends}
-      </div>
+      ${inviteCard()}
 
       <div class="card perk">
         <div class="perk-head">${icon('tag')}<div><h3>Student points</h3><p class="muted sm">Your flights earn ${PERKS.spRate} student points for every Asia Mile a normal member would earn (instead of miles). Spend them on student rewards now; when you graduate, ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles and the rest expires.</p></div></div>
@@ -1699,6 +1798,7 @@
   views.r = (code) => {
     store.set('invite', String(code || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20));
     if (user) { toast('Invite links are for new members.'); return redirect('#/home'); }
+    setTimeout(() => inviteInfo('invited'), 400); // explain the benefit to the invited friend
     return redirect('#/signup');
   };
 
@@ -2026,6 +2126,7 @@
     if (name === 'moderation') loadReports();
     if (name === 'review') loadReview();
     if (user && liveAccount() && (name !== 'verify' || (sv && sv.status === 'pending_review' && !vs.replace)) && Date.now() - (fetchVerification.at || 0) > 60000) fetchVerification(true); // status can change on the server (review, expiry)
+    watchInviteCard();
     liveSync();
   }
 
@@ -2162,6 +2263,22 @@
       savePerks(p); rerender();
       flashTick(`Type ${SZ.plugFor(t.segments[0].to)} adapter claimed`);
     },
+    async 'plan-pick'(el) {
+      const { t, i } = seatCtx, s = t.segments[i], seat = el.dataset.seat;
+      if (!studentCanPick(t, i)) return;
+      if (liveAccount()) {
+        const r = await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, seat), active: true });
+        if (!r.ok) return toast(r.error || 'That seat is not available.');
+      }
+      s.pick = seat; saveTrips(); rerender(); flashTick('Seat ' + seat + ' is yours');
+    },
+    async 'plan-auto'() {
+      const { t, i } = seatCtx, s = t.segments[i];
+      delete s.pick; saveTrips();
+      if (liveAccount()) await liveCall('/flights/' + liveId(s) + '/pax', { ...paxBody(t, s, null), active: true });
+      rerender(); flashTick('Back to automatic seating');
+    },
+    'invite-info'(el) { inviteInfo(el.dataset.who === 'invited' ? 'invited' : 'inviter'); },
     'ref-copy'() {
       const link = refLink();
       if (navigator.share) { navigator.share({ title: 'Fly with me on Cathay', text: 'Verify as a student with my link and we both get bonus miles.', url: link }).catch(() => {}); return; }

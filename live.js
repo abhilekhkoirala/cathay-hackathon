@@ -102,6 +102,12 @@ function broadcast(id) {
 }
 setInterval(() => { for (const set of listeners.values()) for (const res of set) res.write(': ping\n\n'); }, 20000).unref();
 
+/* ---------- student counts, shown only as privacy-safe bands ---------- */
+const MIN_STUDENTS = 3;
+const studentCount = (f) => (f ? Object.values(f.pax).filter((p) => p.student).length : 0);
+const band = (n) => (n >= 10 ? '10+' : n >= 5 ? '5+' : n >= MIN_STUDENTS ? '3+' : null);
+const studentBand = (f) => band(studentCount(f));
+
 /* ---------- flights search (OAG, cached) ---------- */
 const SEARCH_TTL_MS = 12 * 3600 * 1000;
 function price(f, cabin) {
@@ -154,8 +160,26 @@ router.get('/flights', async (req, res) => {
   const cabin = D.CABINS.includes(req.query.cabin) ? req.query.cabin : 'Economy';
   if (!IATA_RE.test(from) || !IATA_RE.test(to) || !DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'from, to (IATA) and date (YYYY-MM-DD) are required.' });
   const s = await schedule(from, to, date);
-  const flights = s.flights.map((f) => ({ ...f, durMin: estimateDur(f), price: price(f, cabin), seatsLeft: seatsLeft(f) }));
+  const flights = s.flights.map((f) => ({ ...f, durMin: estimateDur(f), price: price(f, cabin), seatsLeft: seatsLeft(f), students: studentBand(db.flights[flightId(f)]) }));
   res.json({ ok: true, source: s.source, note: s.note, cached: !!s.cached, flights });
+});
+
+/* Dates near the one searched (±3 days, same route) whose flights already have the most students booked.
+ * Privacy: only students who chose student seating are counted, and only as a band (3+, 5+, 10+); flights
+ * with fewer than 3 students are never mentioned, so nobody can be singled out. No names, no exact counts. */
+router.get('/student-dates', (req, res) => {
+  const from = str(req.query.from, 3).toUpperCase(), to = str(req.query.to, 3).toUpperCase(), date = str(req.query.date, 10);
+  if (!IATA_RE.test(from) || !IATA_RE.test(to) || !DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'Bad search.' });
+  const day = (d) => new Date(d + 'T12:00').getTime(), base = day(date), nowMs = Date.now();
+  const best = {};
+  for (const f of Object.values(db.flights)) {
+    const s = f.seg, d = s.dep.slice(0, 10), n = studentCount(f);
+    if (s.from !== from || s.to !== to || Math.abs(day(d) - base) > 3 * 864e5 || new Date(s.dep).getTime() < nowMs || n < MIN_STUDENTS) continue;
+    if (!best[d] || n > best[d].n) best[d] = { n, date: d, number: s.number, dep: s.dep };
+  }
+  const dates = Object.values(best).sort((a, b) => b.n - a.n || Math.abs(day(a.date) - base) - Math.abs(day(b.date) - base))
+    .map(({ n, ...x }) => ({ ...x, students: band(n) }));
+  res.json({ ok: true, dates });
 });
 
 router.post('/flights/:id/ensure', (req, res) => {

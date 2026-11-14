@@ -140,15 +140,21 @@ router.put('/me/data', express.json({ limit: '220kb' }), auth, (req, res) => {
   res.json({ ok: true });
 });
 
-/* Friends who signed up with my invite code. Only a first-name initial is shared. */
+/* A member's first booking that is still valid (cancelled bookings don't count), reduced to what the bonus needs. */
+function firstBooking(uid) {
+  const trips = ((db.userData[uid] || {}).trips || []).filter((t) => t && t.status !== 'Cancelled' && Array.isArray(t.segments) && t.segments.length);
+  const t = trips.sort((a, b) => String(a.bought || '').localeCompare(String(b.bought || '')))[0];
+  return t ? { ref: t.ref, cabin: t.cabin, bought: String(t.bought || '').slice(0, 10), segments: t.segments.map((s) => ({ from: s.from, to: s.to })) } : null;
+}
+/* Friends who signed up with my invite code (first-name initial only), and, if I was invited, my inviter's status.
+ * The bonus itself is calculated by the app from the first booking: alpha x the miles for non-students,
+ * 1/4 of the booking's student points for students. */
 router.get('/me/referrals', auth, (req, res) => {
   const list = Object.values(db.users).filter((u) => u.invitedBy && u.invitedBy === req.user.refCode)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((u) => {
-      const d = db.userData[u.id] || {};
-      return { name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), verified: Boolean(studentVerify.clientVerified(u)), flown: (d.trips || []).some((t) => t && t.checkedIn) };
-    });
-  res.json({ ok: true, referrals: list });
+    .map((u) => ({ name: u.firstName[0] + '.', joined: u.createdAt.slice(0, 10), student: Boolean(studentVerify.clientVerified(u)), booking: firstBooking(u.id) }));
+  const inviter = req.user.invitedBy && Object.values(db.users).find((u) => u.refCode === req.user.invitedBy);
+  res.json({ ok: true, referrals: list, invited: inviter ? { inviterStudent: Boolean(studentVerify.clientVerified(inviter)), booking: firstBooking(req.user.id) } : null });
 });
 
 module.exports = { router, auth, userFromReq, ageOn, isModerator };

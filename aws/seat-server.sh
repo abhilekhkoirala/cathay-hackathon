@@ -17,11 +17,12 @@ PORT="${PORT:-80}"
 SSH=(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${SSH_KEY:+-i "$SSH_KEY"})
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
-FILES=(server.js live.js oag.js accounts.js db.js chat-server.js package.json package-lock.json index.html mobile.html styles.css app.js data.js
-       student-zone.js chat.js config.js landing.html landing.css landing.js)
-[ -f chat-config.js ] && FILES+=(chat-config.js)
-OAG_KEY_LOCAL="$(grep -E '^OAG_KEY=' .env 2>/dev/null | cut -d= -f2- || true)"
-MODERATORS_LOCAL="$(grep -E '^MODERATORS=' .env 2>/dev/null | cut -d= -f2- || true)"
+# Every top-level page, style and script (new server modules are picked up automatically), plus npm metadata.
+# Never .env, data/ or aws/: secrets and the database stay on each machine.
+FILES=(package.json package-lock.json *.js *.html *.css)
+envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+# Server settings copied from your local .env (only these keys; never SMTP or AWS secrets).
+SERVER_ENV="$(for k in OAG_KEY MODERATORS VERIFIERS DOC_ENCRYPTION_KEY STUDENT_POLICY_VERSION STUDENT_AUTO_APPROVE; do printf '%s=%s\n' "$k" "$(envval $k)"; done)"
 
 say "Copying the app to $HOST"
 "${SSH[@]}" "$HOST" 'mkdir -p ~/cathay-live/data'
@@ -32,7 +33,7 @@ say "Installing Node.js (first run only) and dependencies"
   cd ~/cathay-live && npm ci --omit=dev --no-audit --no-fund'
 
 say "Writing the server .env and starting the service"
-printf 'PORT=%s\nOAG_KEY=%s\nMODERATORS=%s\n' "$PORT" "$OAG_KEY_LOCAL" "$MODERATORS_LOCAL" | "${SSH[@]}" "$HOST" 'umask 077; cat > ~/cathay-live/.env'
+printf 'PORT=%s\n%s\n' "$PORT" "$SERVER_ENV" | "${SSH[@]}" "$HOST" 'umask 077; cat > ~/cathay-live/.env'
 "${SSH[@]}" "$HOST" 'sudo tee /etc/systemd/system/cathay-live.service >/dev/null <<UNIT
 [Unit]
 Description=Cathay Student live demo
