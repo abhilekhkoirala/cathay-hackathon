@@ -1059,7 +1059,11 @@
       <button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})">
         <span>From Hong Kong</span><b>${esc(city(c))}</b><span>Fares from ${money(basePrice('HKG', c))}</span></button>`).join('');
     const verify = !user ? '' : user.verified
-      ? `<div class="banner">${tick()}<span><b>Student status verified</b><br><span class="muted sm">Verified with ${esc(user.verified.email)}${user.verified.until ? ' · valid until ' + esc(fmtDay(user.verified.until)) : ''}.</span></span></div>`
+      ? `<div class="verified-pass" role="status">
+          <span class="vp-badge">${icon('cap')}<i>${icon('check')}</i></span>
+          <div class="vp-text"><span class="vp-eyebrow">Verified student</span><b>Student offers unlocked</b><span class="vp-mail">${esc(user.verified.email)}</span></div>
+          ${user.verified.until ? `<span class="vp-chip">Valid until ${esc(fmtDay(user.verified.until))}</span>` : ''}
+        </div>`
       : verifyNotice() || `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your university email and student ID to unlock student offers and earn a green tick.</span></span>${icon('arrow')}</a>`;
     return `<div class="narrow wide">
       <header class="pagehead"><div><p class="crumb">${isStudent() ? 'Student offers' : 'Offers'}</p><h1>${isStudent() ? 'Student offers' : 'Offers'}</h1>
