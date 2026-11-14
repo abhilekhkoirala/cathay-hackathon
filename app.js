@@ -2,20 +2,28 @@
 (() => {
   'use strict';
   const D = window.AURELIA;
-  const { AIRPORTS, CABINS, SEED_USER, generateFlights, distanceKm, basePrice, airport, hash, mulberry32, toISO, toDate } = D;
+  const { AIRPORTS, CABINS, SEED_USER, SEED_USERS, generateFlights, distanceKm, basePrice, airport, hash, mulberry32, toISO, toDate } = D;
+
+  /* ---------- demo users ---------- */
+  const USERS = (SEED_USERS && SEED_USERS.length) ? SEED_USERS : [SEED_USER];
+  let activeId = SEED_USER.id; /* which seeded user's data is loaded; set in loadState() */
 
   /* ---------- storage (localStorage with in-memory fallback) ---------- */
+  /* Per-user keys are namespaced by user id so each demo user has their own trips, prefs, verification and perks.
+   * The first user keeps the original un-prefixed keys, so browsers that already visited keep their data. */
+  const PER_USER = new Set(['trips', 'prefs', 'verified', 'perks', 'invitedBy', 'chatName']);
+  const skey = (k) => 'cathay.' + (PER_USER.has(k) && activeId !== SEED_USER.id ? activeId + '.' : '') + k;
   const mem = {};
   const store = {
     get(k, d) {
       try {
-        const v = localStorage.getItem('cathay.' + k);
+        const v = localStorage.getItem(skey(k));
         return v === null ? d : JSON.parse(v);
-      } catch { return k in mem ? mem[k] : d; }
+      } catch { return skey(k) in mem ? mem[skey(k)] : d; }
     },
     set(k, v) {
-      mem[k] = v;
-      try { localStorage.setItem('cathay.' + k, JSON.stringify(v)); } catch {}
+      mem[skey(k)] = v;
+      try { localStorage.setItem(skey(k), JSON.stringify(v)); } catch {}
     },
   };
 
@@ -99,11 +107,13 @@
   const seatSel = { key: '', seat: '' };
 
   function loadState() {
+    const base = USERS.find((x) => x.id === store.get('activeUser', SEED_USER.id)) || SEED_USER;
+    activeId = base.id;
     trips = store.get('trips', null);
-    if (!trips) { trips = D.seedTrips(); store.set('trips', trips); }
+    if (!trips) { trips = D.seedTrips(base); store.set('trips', trips); }
     const loggedOut = store.get('loggedOut', false);
     const saved = store.get('prefs', null);
-    const u = JSON.parse(JSON.stringify(SEED_USER));
+    const u = JSON.parse(JSON.stringify(base));
     if (saved) u.prefs = { ...u.prefs, ...saved };
     user = loggedOut ? null : u;
     if (user) user.verified = store.get('verified', null);
@@ -965,7 +975,7 @@
         <p id="retrieveErr" class="err" hidden></p>
         <button class="btn btn-primary block" type="submit">Continue</button>
       </form>
-      <p class="muted sm">Demo hint: try <b class="mono">K7M2QX</b> with family name <b>Koirala</b>.</p>
+      ${trips[0] ? `<p class="muted sm">Demo hint: try <b class="mono">${esc((upcoming()[0] || trips[0]).ref)}</b> with family name <b>${esc((upcoming()[0] || trips[0]).pax[0].last)}</b>.</p>` : ''}
     </div>`;
 
   views.signin = () => `
@@ -978,9 +988,9 @@
           <label class="field"><span>Password</span><input type="password" name="password" value="demo1234" required></label>
           <p id="signinErr" class="err" hidden></p>
           <button class="btn btn-primary block" type="submit">Sign in</button>
-          <button class="btn btn-ghost block" type="button" data-action="demo-login">Continue as Abhilekh (demo)</button>
+          ${USERS.map((u) => `<button class="btn btn-ghost block" type="button" data-action="demo-login" data-user="${u.id}">Continue as ${esc(u.firstName)} (demo)</button>`).join('')}
         </form>
-        <p class="muted sm center">Demo credentials are pre-filled. This is a concept prototype; no real accounts exist.</p>
+        <p class="muted sm center">Demo credentials are pre-filled. ${USERS.length > 1 ? `Other demo accounts: ${USERS.slice(1).map((u) => `<b>${esc(u.email)}</b>`).join(', ')} (same password).` : ''} This is a concept prototype; no real accounts exist.</p>
       </div></div>`;
 
   /* Student perks section of the Points & rewards page. */
@@ -1310,7 +1320,7 @@
       const t = findTrip(el.dataset.ref); t.status = 'Cancelled'; saveTrips(); toast('Booking cancelled.'); render();
     },
     signout() { store.set('loggedOut', true); user = null; toast('Signed out.'); location.hash = '#/home'; render(); },
-    'demo-login'() { store.set('loggedOut', false); loadState(); toast('Signed in as Abhilekh'); location.hash = '#/home'; render(); },
+    'demo-login'(el) { const u = USERS.find((x) => x.id === (el && el.dataset && el.dataset.user)) || SEED_USER; store.set('activeUser', u.id); store.set('loggedOut', false); loadState(); toast('Signed in as ' + u.firstName); location.hash = '#/home'; render(); },
     'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('sales', {}); store.set('seatplans', {}); store.set('perks', {}); store.set('invitedBy', ''); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
     unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
     'verify-resend'() { startVerify(vs.email, true); },
@@ -1406,10 +1416,10 @@
       location.hash = '#/trip/' + ref;
     } else if (id === 'signinForm') {
       const em = String(f.get('email')).trim().toLowerCase();
-      const ok = (em === SEED_USER.email || em.replace(/\s/g, '') === SEED_USER.memberId.replace(/\s/g, '').toLowerCase()) && f.get('password') === SEED_USER.password;
+      const match = USERS.find((u) => (em === u.email || em.replace(/\s/g, '') === u.memberId.replace(/\s/g, '').toLowerCase()) && f.get('password') === u.password);
       const err = $('#signinErr');
-      if (!ok) { err.textContent = 'Those details don\'t match the demo account.'; err.hidden = false; return; }
-      actions['demo-login']();
+      if (!match) { err.textContent = 'Those details don\'t match a demo account.'; err.hidden = false; return; }
+      actions['demo-login']({ dataset: { user: match.id } });
     } else if (id === 'retrieveForm') {
       const t = findTrip(String(f.get('ref')).trim().toUpperCase());
       const err = $('#retrieveErr');
