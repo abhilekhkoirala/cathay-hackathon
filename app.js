@@ -753,7 +753,7 @@
   const quickLinks = () => `<section class="card ql d-only"><h4>Quick links</h4>
     <a class="qrow" href="#/baggage">${icon('bag')}<div><b>Baggage FAQ</b><span class="s">Know your allowance</span></div></a>
     <a class="qrow" href="#/rewards">${icon('gift')}<div><b>Student perks</b><span class="s">Free adapter, invites, graduation gift</span></div></a>
-    <button class="qrow" type="button" data-action="soon" data-label="Campus community">${icon('ring')}<div><b>Campus community</b><span class="s">Connect with student travellers</span></div></button></section>`;
+    <a class="qrow" href="#/community">${icon('ring')}<div><b>Campus community</b><span class="s">Events, offers and city guides for students</span></div></a></section>`;
 
   const activityRow = (a) => (!a ? `<div class="card act"><span class="ibadge">${icon('sparkle')}</span><div><b>No activity yet</b><span class="s">Points appear after you verify as a student and check in to flights.</span></div></div>`
     : `<div class="card act"><span class="ibadge">${icon('sparkle')}</span>
@@ -1054,6 +1054,37 @@
     </div>`;
 
   const OFFER_TONES = [['#0b4a35', '#2f8a62'], ['#164b36', '#3f9a72'], ['#27502f', '#8aa83a'], ['#3a4f1d', '#a9c24a'], ['#0f3d4a', '#3f8f9a'], ['#5a3a14', '#d98b3f']];
+  /* ---------- Travel community: student life (events, offers, local guides) ---------- */
+  const COMMUNITY = [
+    { id: 'offers', title: 'Explore Cathay Offers', text: 'Explore all the perks and benefits you get as a Cathay Student Member.', href: '#/discover', tone: 'green' },
+    { id: 'dining', title: 'DINING OFFERS', text: 'Student-only savings at selected cafés and restaurants.', tone: 'gold',
+      more: 'Student-only savings at selected cafés and restaurants near campus and in the cities you fly to. Show your verified Cathay Student membership to redeem.' },
+    { id: 'mobility', title: 'MOBILITY DEALS', text: 'Discover student deals on local transport.', tone: 'green',
+      more: 'Student deals on airport transfers, metro and bus passes, bikes and ride-hailing in the cities you study in and travel to.' },
+    { id: 'city', title: 'CITY GUIDE', text: 'Neighbourhoods, transport, essentials and hidden gems.', tone: 'green',
+      more: 'Getting settled in a new city: where students live, how to get around, essentials for your first week, and hidden gems recommended by other students.' },
+  ];
+  views.community = (sub) => {
+    const c = COMMUNITY.find((x) => x.id === sub && x.more);
+    if (c) {
+      return `<div class="narrow">${backLink('#/community', 'Student life')}
+        <p class="eyebrow">Travel community</p><h1>${esc(c.title.charAt(0) + c.title.slice(1).toLowerCase())}</h1>
+        <p class="cm-sub">${esc(c.more)}</p>
+        <div class="card cm-soon ${c.tone}">${icon('sparkle')}<div><b>Partner offers are coming soon</b><p class="muted sm">We're lining up partners for this section. ${isStudent() ? "You'll see them here as soon as they go live." : 'Verify your student status so you can use them as soon as they go live.'}</p></div></div>
+        ${user && !isStudent() ? `<a class="btn btn-primary" href="#/verify">Verify my student status</a>` : ''}
+      </div>`;
+    }
+    return `<div class="narrow wide cm">
+      <header class="cm-head"><h1>Make the most of student life</h1>
+        <p class="cm-sub">Discover campus events, student-only offers and useful local experiences.</p></header>
+      <section class="cm-feature" aria-label="Featured campus event"><p class="cm-eyebrow">Featured campus event</p><h2>CATHAY CAMPUS TOUR ON 03/12</h2></section>
+      <h3 class="cm-sect">Explore student life</h3>
+      <div class="cm-grid">${COMMUNITY.map((x) => `<article class="cm-card ${x.tone}">
+        <h4>${esc(x.title)}</h4><p>${esc(x.text)}</p>
+        <a class="cm-go" href="${x.href || '#/community/' + x.id}">Explore ${icon('ext')}</a></article>`).join('')}</div>
+    </div>`;
+  };
+
   views.offers = () => {
     const cards = ['SIN', 'NRT', 'ICN', 'BKK', 'SYD', 'LHR'].map((c, i) => `
       <button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})">
@@ -2263,7 +2294,7 @@
 
   /* ---------- router ---------- */
   const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks', 'book', 'results', 'confirm', 'chat', 'moderation', 'review', 'seating-ops']);
-  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', p: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile', 'seating-ops': 'profile' };
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', chat: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', p: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile', signup: 'profile', discover: 'offers', 'chat-safety': 'trips', parents: 'offers', moderation: 'profile', review: 'profile', 'seating-ops': 'profile', community: 'community' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
