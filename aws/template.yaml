@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Aurelia Air demo — static site on S3 + CloudFront, with the student-verify API
+  (API Gateway HTTP API -> Lambda -> DynamoDB + SES) served from the same CloudFront domain at /api/*.
+
+Parameters:
+  SenderEmail:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    Description: >
+      Email address you own and have verified in SES (in this region). Verification emails are sent
+      from it with the display name "Aurelia Student Verify". Not needed when MailMode is demo.
+  MailMode:
+    Type: String
+    Default: ses
+    AllowedValues: [ses, demo]
+    Description: >
+      ses = really email the code. demo = skip SES and return the code in the API response
+      (shown on screen), useful for testing before SES is set up.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+
+Resources:
+  # ---------------------------------------------------------------- state
+  CodeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ---------------------------------------------------------------- API
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 25
+
+  VerifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: index.handler
+      Description: Aurelia student verification (start / confirm / health)
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref CodeTable
+          SENDER_EMAIL: !Ref SenderEmail
+          MAIL_MODE: !Ref MailMode
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CodeTable
+        - Version: '2012-10-17'
+          Statement:
+            # In the SES sandbox SES also authorises against the *recipient* identity,
+            # so this covers every identity in the account/region rather than only the sender.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'
+      Events:
+        Start:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/verify/start, Method: POST }
+        Confirm:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/verify/confirm, Method: POST }
+        Health:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/health, Method: GET }
+
+  VerifyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${VerifyFunction}'
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------- website
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  SiteOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-site-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  # Forwards CloudFront's own (unspoofable) viewer-IP header to the API for rate limiting.
+  ApiOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub '${AWS::StackName}-api-viewer-address'
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers: [CloudFront-Viewer-Address]
+        CookiesConfig: { CookieBehavior: none }
+        QueryStringsConfig: { QueryStringBehavior: all }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName} — Aurelia Air demo'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            S3OriginConfig: { OriginAccessIdentity: '' }
+            OriginAccessControlId: !GetAtt SiteOAC.Id
+          - Id: api
+            DomainName: !Sub '${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # Managed-CachingDisabled
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+
+Outputs:
+  SiteUrl:
+    Description: Your live site
+    Value: !Sub 'https://${Distribution.DomainName}'
+  BucketName:
+    Description: S3 bucket holding the static files
+    Value: !Ref SiteBucket
+  DistributionId:
+    Description: CloudFront distribution id (for cache invalidation)
+    Value: !Ref Distribution
+  ApiEndpoint:
+    Description: Direct API Gateway URL (normally reached through the site URL at /api/*)
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  TableName:
+    Description: DynamoDB table holding pending codes
+    Value: !Ref CodeTable
