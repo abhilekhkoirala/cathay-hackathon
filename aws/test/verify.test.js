@@ -56,7 +56,7 @@ test('start emails a 6-digit code and never returns it; confirm accepts it once'
   assert.equal(r.status, 200); assert.equal(r.sent, true); assert.equal(r.demoCode, undefined);
   assert.match(r.to, /^j•+e@student\.cuhk\.edu\.hk$/);
   assert.equal(sent.length, 1); assert.equal(sent[0].to, EMAIL);
-  assert.match(sent[0].subject, /^Your Aurelia verification code: \d{6}$/);
+  assert.match(sent[0].subject, /^Your Cathay Student verification code: \d{6}$/);
   const code = codeFromMail();
   const ok = await call('POST', '/api/verify/confirm', { email: EMAIL, code });
   assert.equal(ok.status, 200); assert.equal(ok.verified, true); assert.equal(ok.email, EMAIL);

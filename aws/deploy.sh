@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys Aurelia Air to AWS: infrastructure (SAM) + website files + CloudFront cache refresh.
+# Deploys Cathay Student to AWS: infrastructure (SAM) + website files + CloudFront cache refresh.
 # Safe to re-run — run it again after any change to the site or the API.
 #
 #   SENDER_EMAIL=you@gmail.com ./aws/deploy.sh

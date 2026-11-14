@@ -1,4 +1,4 @@
-/* Aurelia Air — DEMO data. Fictional airline, fictional user. */
+/* Cathay Student — DEMO data. Illustrative flights, points and user. */
 (function () {
   const pad = (n) => String(n).padStart(2, '0');
   const toISO = (d) =>
@@ -40,6 +40,7 @@
     { code: 'KTM', city: 'Kathmandu', country: 'Nepal', lat: 27.7, lon: 85.36 },
     { code: 'ALA', city: 'Almaty', country: 'Kazakhstan', lat: 43.35, lon: 77.04 },
     { code: 'SVO', city: 'Moscow', country: 'Russia', lat: 55.97, lon: 37.41 },
+    { code: 'CDG', city: 'Paris', country: 'France', lat: 49.01, lon: 2.55 },
     { code: 'DXB', city: 'Dubai', country: 'UAE', lat: 25.25, lon: 55.36 },
     { code: 'LHR', city: 'London', country: 'United Kingdom', lat: 51.47, lon: -0.45 },
     { code: 'SYD', city: 'Sydney', country: 'Australia', lat: -33.94, lon: 151.18 },
@@ -84,7 +85,7 @@
       const durMin = base + Math.round(r() * 20) + (stops ? 95 : 0);
       const arr = new Date(dep.getTime() + durMin * 60000);
       out.push({
-        number: 'AU ' + (100 + Math.floor(r() * 880)),
+        number: 'CX ' + (100 + Math.floor(r() * 880)),
         from,
         to,
         dep: toISO(dep),
@@ -101,20 +102,24 @@
 
   const SEED_USER = {
     id: 'u_1001',
-    firstName: 'John',
-    lastName: 'Doe',
-    email: 'john.doe@example.com',
+    firstName: 'Abhilekh',
+    lastName: 'Koirala',
+    email: 'abhilekh@example.com',
     password: 'demo1234',
-    memberId: 'AU 8800 1234',
-    tier: 'Gold',
-    points: 48250,
-    tierPoints: 612,
-    nextTier: 'Platinum',
-    nextTierAt: 1000,
+    memberId: 'CS 2026 4821',
+    tier: 'Student',
+    points: 12480,
+    asiaMiles: 2350, // Asia Miles earned before verifying as a student (cards, partners)
+    earnedThisMonth: 1240,
+    breakdown: { flights: 58, campus: 27, partners: 15 },
+    activity: [
+      { title: 'Student welcome bonus', date: '2026-11-14', note: 'Points credited', pts: 500 },
+      { title: 'Campus partner purchase', date: '2026-11-10', note: 'Points credited', pts: 120 },
+      { title: 'Flight booking · HKG to KTM', date: '2026-11-08', note: 'Points credited', pts: 620 },
+    ],
     phone: '+852 5555 0123',
-    dob: '1994-03-12',
-    nationality: 'Hong Kong SAR',
-    memberSince: '2021',
+    dob: '2005-03-12',
+    memberSince: '2026',
     prefs: { seat: 'Window', meal: 'Standard', notifications: true },
   };
 
@@ -125,52 +130,44 @@
     return { number, from, to, dep: toISO(depDate), arr: toISO(arr), durMin, stops: 0, aircraft, seat };
   }
 
+  /* To demo online check-in (opens 48 h before departure), change addDays(38, ...) below to addDays(1, ...). */
   function seedTrips() {
+    const me = [{ first: 'Abhilekh', last: 'Koirala' }];
     return [
       {
         ref: 'K7M2QX',
         status: 'Confirmed',
-        cabin: 'Business',
-        pax: [{ first: 'John', last: 'Doe' }],
-        total: 1286,
-        checkedIn: false,
-        bought: toISO(addDays(-20, 10)),
-        segments: [
-          mkSeg('AU 507', 'HKG', 'NRT', addDays(1, 9, 40), 'A350-900', '4A'),
-          mkSeg('AU 508', 'NRT', 'HKG', addDays(8, 17, 25), 'A350-900', '5A'),
-        ],
-      },
-      {
-        ref: 'R3T9WD',
-        status: 'Confirmed',
         cabin: 'Economy',
-        pax: [{ first: 'John', last: 'Doe' }],
-        total: 742,
+        pax: me,
+        total: 842,
         checkedIn: false,
         bought: toISO(addDays(-6, 14)),
-        segments: [mkSeg('AU 021', 'HKG', 'LHR', addDays(46, 23, 55), 'B777-300ER', '38K')],
+        segments: [
+          mkSeg('CX 751', 'HKG', 'KTM', addDays(38, 10, 35), 'A330-300', ''),
+          mkSeg('CX 752', 'KTM', 'HKG', addDays(66, 13, 20), 'A330-300', ''),
+        ],
       },
       {
         ref: 'M7S2HK',
         status: 'Confirmed',
         cabin: 'Economy',
-        pax: [{ first: 'John', last: 'Doe' }],
+        pax: me,
         total: 698,
         checkedIn: false,
         bought: toISO(addDays(-12, 11)),
-        segments: [mkSeg('AU 044', 'SVO', 'HKG', addDays(1, 20, 15), 'A350-900', '')],
+        segments: [mkSeg('CX 044', 'SVO', 'HKG', addDays(1, 20, 15), 'A350-900', '')],
       },
       {
         ref: 'P8C4HN',
         status: 'Completed',
         cabin: 'Economy',
-        pax: [{ first: 'John', last: 'Doe' }],
+        pax: me,
         total: 318,
         checkedIn: true,
         bought: toISO(addDays(-60, 9)),
         segments: [
-          mkSeg('AU 711', 'HKG', 'SIN', addDays(-34, 8, 10), 'A330-300', '22A'),
-          mkSeg('AU 712', 'SIN', 'HKG', addDays(-30, 19, 45), 'A330-300', '22C'),
+          mkSeg('CX 711', 'HKG', 'SIN', addDays(-34, 8, 10), 'A330-300', '22A'),
+          mkSeg('CX 712', 'SIN', 'HKG', addDays(-30, 19, 45), 'A330-300', '22C'),
         ],
       },
     ];

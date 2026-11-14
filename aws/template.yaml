@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Aurelia Air demo — static site on S3 + CloudFront, with the student-verify API
+  Cathay Student demo — static site on S3 + CloudFront, with the student-verify API
   (API Gateway HTTP API -> Lambda -> DynamoDB + SES) served from the same CloudFront domain at /api/*.
 
 Parameters:
@@ -11,7 +11,7 @@ Parameters:
     AllowedPattern: '^$|^[^\s@]+@[^\s@]+\.[^\s@]+$'
     Description: >
       Email address you own and have verified in SES (in this region). Verification emails are sent
-      from it with the display name "Aurelia Student Verify". Not needed when MailMode is demo.
+      from it with the display name "Cathay Student Verify". Not needed when MailMode is demo.
   MailMode:
     Type: String
     Default: ses
@@ -54,7 +54,7 @@ Resources:
     Properties:
       CodeUri: lambda/
       Handler: index.handler
-      Description: Aurelia student verification (start / confirm / health)
+      Description: Cathay Student verification (start / confirm / health)
       Environment:
         Variables:
           TABLE_NAME: !Ref CodeTable
@@ -142,7 +142,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: !Sub '${AWS::StackName} — Aurelia Air demo'
+        Comment: !Sub '${AWS::StackName} — Cathay Student demo'
         DefaultRootObject: index.html
         HttpVersion: http2and3
         Origins:

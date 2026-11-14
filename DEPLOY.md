@@ -1,4 +1,4 @@
-# Deploying Aurelia Air to AWS
+# Deploying Cathay Student to AWS
 
 One command puts the whole app on a live HTTPS URL (`https://xxxx.cloudfront.net`) with working email verification.
 
@@ -52,7 +52,7 @@ aws sts get-caller-identity
 
 ## 3. Pick the sender address (SES)
 
-SES only sends from addresses/domains you've verified, and `no-reply@aurelia.com` isn't yours to verify. Use **any inbox you can open**, e.g. your own Gmail. Recipients will see it as **"Aurelia Student Verify"** `<that address>`.
+SES only sends from addresses/domains you've verified, and a made-up no-reply address isn't yours to verify. Use **any inbox you can open**, e.g. your own Gmail. Recipients will see it as **"Cathay Student Verify"** `<that address>`.
 
 New SES accounts are in the **sandbox**: they can send *only to addresses verified in SES*. That's fine for your own demo, as long as you verify the address(es) you will type into the app, **in the same region (ap-southeast-2)**:
 
@@ -95,7 +95,7 @@ Re-run later with `SENDER_EMAIL=... ./aws/deploy.sh` to switch to real email.
 curl https://YOUR-URL/api/health          # {"ok":true,"mail":"ses"}
 ```
 
-Then in the browser: sign in (already signed in as John Doe) → Profile → **Verify student status** → enter a `.edu` address you verified in SES → get the code → green tick.
+Then in the browser: sign in (already signed in as Abhilekh) → Settings → **Verify student status** → enter a `.edu` address you verified in SES → get the code → green tick.
 
 If you see the toast *"Demo mode: no email server connected"*, the browser couldn't reach the API (the app falls back to an on-screen code when `/api` doesn't answer). Check `/api/health` and the logs below.
 

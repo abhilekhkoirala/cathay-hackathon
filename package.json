@@ -2,7 +2,7 @@
   "name": "aurelia-air-demo",
   "version": "1.1.0",
   "private": true,
-  "description": "Fictional airline hackathon demo with .edu student verification",
+  "description": "Cathay Student concept prototype (flights & rewards) with .edu student verification",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

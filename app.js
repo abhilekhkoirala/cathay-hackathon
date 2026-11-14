@@ -1,4 +1,4 @@
-/* Aurelia Air — DEMO app. Fictional airline; all data is fake and stored in localStorage. */
+/* Cathay Student — DEMO app. All data is illustrative and stored in localStorage. */
 (() => {
   'use strict';
   const D = window.AURELIA;
@@ -9,13 +9,13 @@
   const store = {
     get(k, d) {
       try {
-        const v = localStorage.getItem('aurelia.' + k);
+        const v = localStorage.getItem('cathay.' + k);
         return v === null ? d : JSON.parse(v);
       } catch { return k in mem ? mem[k] : d; }
     },
     set(k, v) {
       mem[k] = v;
-      try { localStorage.setItem('aurelia.' + k, JSON.stringify(v)); } catch {}
+      try { localStorage.setItem('cathay.' + k, JSON.stringify(v)); } catch {}
     },
   };
 
@@ -67,7 +67,15 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+    sparkle: '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>',
+    ring: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/>',
+    ext: '<path d="M7 17L17 7M8 7h9v9"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     cap: '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2 9 2 12 0v-5M22 9v6"/>',
+    wifi: '<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/>',
+    plug: '<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>',
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>',
   };
   const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.info}</svg>`;
 
@@ -175,6 +183,13 @@
   const verifiedLabel = () => `<div class="sz-verified">${tick()} Verified student</div>`;
   const SEAT_QUESTION = 'Do you want to be seated next to students?';
 
+  /* Short floating tick confirmation; the page stays where it is. */
+  function flashTick(text) {
+    document.querySelector('.flash')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="flash" role="status">${tick()}<span>${esc(text)}</span></div>`);
+    setTimeout(() => document.querySelector('.flash')?.remove(), 1700);
+  }
+
   function showModal(title, text) {
     document.querySelector('.modal-bg')?.remove();
     document.body.insertAdjacentHTML('beforeend', `
@@ -226,7 +241,25 @@
     <div class="card sz-card">
       ${verifiedLabel()}
       ${t.checkedIn ? seated : t.studentSeat === undefined ? seatPoll(undefined, t.ref) : seatChoice(t.studentSeat, t.ref)}
+      ${adapterHint(t)}
+      ${tripRewardsCard(t)}
       ${planner}
+    </div>`;
+  }
+
+  /* Trip extras paid with student points, like travel extras in Manage booking. */
+  function tripRewardsCard(t) {
+    const p = perks(), left = spLeft(p), added = tripRewards(t);
+    if (p.graduated && !added.length) return '';
+    return `
+    <div class="trip-rewards">
+      <div class="row between"><b>Pay with student points</b><span class="rw-pts">${left.toLocaleString()} pts available</span></div>
+      ${REWARDS.map((rw) => {
+        const done = added.some((r) => r.id === rw.id), late = rw.id === 'seat' && t.checkedIn, off = left < rw.pts || late || p.graduated;
+        return `<div class="perk-row reward"><div class="rw-info">${icon(rw.icon)}<div><b>${rw.name}</b><div class="muted sm">${rw.note}</div></div></div>
+          ${done ? '<span class="badge ok">Added</span>' : `<button class="btn ${off ? 'btn-ghost' : 'btn-primary'} sm-btn" data-action="redeem" data-ref="${t.ref}" data-id="${rw.id}" ${off ? 'disabled' : ''}>${rw.pts.toLocaleString()} pts</button>`}</div>`;
+      }).join('')}
+      <a class="sm" href="#/rewards">How student points work</a>
     </div>`;
   }
 
@@ -246,70 +279,273 @@
     return `<div class="poll"><p class="poll-q">${SEAT_QUESTION}</p><div class="poll-opts">${opt('yes', 'Yes')}${opt('no', 'No')}</div></div>`;
   }
 
+  /* ---------- student perks ---------- */
+  /* Free adapter (once per study programme), invite friends, graduation gift. All tied to the
+   * verified student membership, no promo codes. */
+  /* spRate: student points per Asia Mile a normal member would earn. spConvert: share converted to
+   * Asia Miles at graduation (rest expires). With ~85% of students converting, Cathay pays
+   * 1.5 × 0.70 × 0.85 ≈ 0.89 of normal miles while students get 1.05× (break-even up to 95% converting). */
+  const PERKS = { referralMiles: 1000, referralCap: 10, gradMiles: 3000, boostMonths: 12, spRate: 1.5, spConvert: 0.7 };
+  const EARN_RATE = { Economy: 0.5, 'Premium Economy': 0.75, Business: 1.25, First: 1.5 };
+  /* Asia Miles a normal member would earn on a flight (share of the distance in miles, by cabin). */
+  const flightMiles = (seg, cabin) => Math.round((distanceKm(seg.from, seg.to) * 0.6214 * (EARN_RATE[cabin] || 0.5)) / 10) * 10;
+  const spConverted = (sp) => Math.floor((sp || 0) * PERKS.spConvert);
+  /* Student rewards, paid in student points during studies. Each price is above break-even:
+   * a point costs Cathay at most 0.7 × 0.85 × US$0.006 ≈ US$0.0036 if converted at graduation. */
+  const REWARDS = [
+    { id: 'msg', icon: 'chat', name: 'Wi-Fi messaging pass', pts: 1000, note: 'WhatsApp, iMessage, WeChat… for the whole flight.' },
+    { id: 'wifi', icon: 'wifi', name: 'Full-flight Wi-Fi', pts: 5000, note: 'Browse and stream for the whole flight.' },
+    { id: 'seat', icon: 'seat', name: 'Preferred seat', pts: 1000, note: 'Front or extra-legroom seat, if still empty at check-in.' },
+    { id: 'lounge', icon: 'lounge', name: 'Lounge pass', pts: 6000, note: 'One lounge visit before your flight.' },
+  ]; // Economy trips only: premium cabins already include them.
+  const spSpent = (p) => (p.redeemed || []).reduce((n, r) => n + r.pts, 0);
+  const spLeft = (p) => (p.graduated ? 0 : (user.points || 0) + (p.sp || 0) - spSpent(p));
+  /* Pay for a reward on a trip with student points; returns an error message or ''. */
+  function redeem(t, rw) {
+    const p = perks();
+    if (!t || t.cabin !== 'Economy') return 'Student rewards are for Economy trips.';
+    if ((p.redeemed || []).some((r) => r.id === rw.id && r.ref === t.ref)) return `${rw.name} is already added to this trip.`;
+    if (spLeft(p) < rw.pts) return 'Not enough student points.';
+    p.redeemed = [...(p.redeemed || []), { id: rw.id, ref: t.ref, pts: rw.pts, at: toISO(new Date()) }];
+    savePerks(p);
+    return '';
+  }
+  const tripRewards = (t) => (user && user.verified ? (perks().redeemed || []).filter((r) => r.ref === t.ref) : []);
+  const rewardName = (id) => REWARDS.find((r) => r.id === id).name;
+  const perks = () => store.get('perks', null) || {};
+  const savePerks = (p) => store.set('perks', p);
+  const plugNeeded = (s) => Boolean(SZ.plugFor(s.to)) && SZ.plugFor(s.to) !== SZ.plugFor(s.from);
+  const studyCountry = () => SZ.studyCountry(user.verified.email);
+  const countryName = (c) => c.replace(/ SAR$/, '');
+  /* The free adapter is a welcome gift: once per study programme (per verified university email),
+   * on the first trip to the university's country where the plugs differ from home. */
+  const adapterClaimed = (p = perks()) => Boolean(p.adapter && p.adapter.email === user.verified.email);
+  function adapterTrip(p = perks()) {
+    if (adapterClaimed(p)) return findTrip(p.adapter.ref) || null;
+    return upcoming().find((t) => { const s = t.segments[0]; return (airport(s.to) || {}).country === studyCountry() && plugNeeded(s); }) || null;
+  }
+  function gradBoostUntil(p) {
+    if (!p.graduated) return null;
+    const until = new Date(p.graduated);
+    until.setMonth(until.getMonth() + PERKS.boostMonths);
+    return until > new Date() ? until : null;
+  }
+  /* Miles earned through student perks. */
+  function perkMiles(p = perks()) {
+    const refs = p.referrals || [];
+    return {
+      credited: refs.filter((r) => r.flown).length * PERKS.referralMiles + (p.graduated ? PERKS.gradMiles + (p.gradConverted || 0) : 0),
+      pending: refs.filter((r) => !r.flown).length * PERKS.referralMiles,
+    };
+  }
+  const asiaMiles = () => (user.asiaMiles || 0) + perkMiles().credited;
+  const currentTier = () => (user.verified && gradBoostUntil(perks()) ? SZ.tierUp(user.tier) : user.tier);
+  const refLink = () => `${location.origin}${location.pathname}#/r/${SZ.referralCode(user.firstName, user.verified.email)}`;
+  /* Re-render without jumping to the top of the page. */
+  const rerender = () => { const y = window.scrollY; render(); window.scrollTo(0, y); };
+
+  function adapterHint(t) {
+    if (!user || !user.verified) return '';
+    const at = adapterTrip(), s = t.segments[0];
+    if (!at || at.ref !== t.ref) return '';
+    return adapterClaimed()
+      ? `<div class="sz-choice yes"><span>${icon('plug')} Type ${esc(SZ.plugFor(s.to))} adapter claimed · collect it from the crew on board</span></div>`
+      : `<div class="sz-choice yes"><span>${icon('plug')} Free Type ${esc(SZ.plugFor(s.to))} adapter for ${esc(city(s.to))}</span><button type="button" class="link-btn" data-action="claim-adapter" data-ref="${t.ref}">Claim</button></div>`;
+  }
+
   /* ---------- views ---------- */
   const views = {};
 
+  /* ---------- student home (Figma: "Cathay Student — Home" + "No Flight Booked" + mobile) ---------- */
+  const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  const dayStart = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const daysBetween = (a, b) => Math.round((dayStart(b) - dayStart(a)) / 864e5);
+  const daysUntil = (iso) => daysBetween(new Date(), iso);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const dayMon = (iso) => { const d = new Date(iso); return `${d.getDate()} ${MON[d.getMonth()]}`; };
+  const shortDay = (iso) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const longDay = (iso) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+  const pts = (n) => Number(n).toLocaleString('en-US');
+  const kfmt = (n) => (Math.floor(n / 100) / 10).toFixed(1) + 'k';
+  const link = (href, label, cls = 'link') => `<a class="${cls}" href="${href}">${label}${icon('ext')}</a>`;
+
+  function donut(bd, total) {
+    const R = 44, C = 2 * Math.PI * R;
+    let off = 0;
+    const arcs = [['flights', '#c9e265'], ['campus', '#3f9a72'], ['partners', '#f1a25a']].map(([k, col]) => {
+      const len = (C * bd[k]) / 100, vis = Math.max(0, len - 2.5);
+      const el = `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${col}" stroke-width="24" stroke-dasharray="${vis.toFixed(2)} ${(C - vis).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"/>`;
+      off += len;
+      return el;
+    }).join('');
+    return `<div class="donut" role="img" aria-label="Points breakdown: ${bd.flights}% flights, ${bd.campus}% campus, ${bd.partners}% partners"><svg viewBox="0 0 120 120" aria-hidden="true"><g transform="rotate(-90 60 60)">${arcs}</g></svg><div class="donut-c"><b>${kfmt(total)}</b><small>TOTAL</small></div></div>`;
+  }
+
+  function pointsCard() {
+    const bd = user.breakdown;
+    const items = [['Flights', 'flights', 'lime'], ['Campus', 'campus', 'leaf'], ['Partners', 'partners', 'amber']];
+    return `<section class="points">
+      <div class="pts-main">
+        <span class="lab">Your student points</span>
+        <div class="pts-num">${pts(spLeft(perks()))}</div>
+        <div class="pts-sub">points available</div>
+        <span class="earned">${icon('up')} ${pts(user.earnedThisMonth)} earned this month</span>
+        <p class="pts-note">Illustrative balance · ${pts(user.earnedThisMonth)} earned this month</p>
+      </div>
+      <div class="bd-wrap">
+        <span class="lab d-only">Points breakdown</span>
+        <div class="bd">${donut(bd, spLeft(perks()))}
+          <ul class="legend d-only">${items.map(([n, k, c]) => `<li><i class="dot ${c}"></i>${n}<b>${bd[k]}%</b></li>`).join('')}</ul></div>
+        <p class="m-legend m-only">${bd.flights}% flights · ${bd.campus}% campus<br>${bd.partners}% partners</p>
+        <p class="foot-note d-only">Illustrative balance · refreshed just now</p>
+      </div>
+    </section>`;
+  }
+
+  function nextFlightCard(next) {
+    const s = next.segments[0], n = daysUntil(s.dep), view = `#/trip/${next.ref}`;
+    return `<div class="nf-label m-only"><span class="lab">Next flight</span>${link(view, 'View booking')}</div>
+    <section class="card nf">
+      <div class="nf-top"><span class="lab d-only">Next flight</span><span class="pillc">Confirmed</span></div>
+      <div class="nf-date">${dayMon(s.dep)}</div>
+      <div class="nf-route"><div><b>${s.from}</b><span class="d-only">${esc(city(s.from))}</span></div>${icon('arrow')}<div><b>${s.to}</b><span class="d-only">${esc(city(s.to))}</span></div></div>
+      <p class="nf-cities m-only">${esc(city(s.from))} · ${esc(city(s.to))}</p>
+      <div class="nf-foot d-only"><div><span class="lab">Your flight in</span><b>${n <= 0 ? 'today' : plural(n, 'day')}</b></div>${link(view, 'View booking')}</div>
+      <p class="nf-days m-only">${n <= 0 ? 'Departs today' : plural(n, 'day') + ' to go'}</p>
+    </section>`;
+  }
+
+  const noFlightCard = () => `<section class="card nf d-only"><span class="lab">Next flight</span>
+    <div class="nf-empty"><b>No flight booked yet</b><span>Your next booking will appear here.</span></div>${link('#/book', 'Book a flight')}</section>`;
+
+  function companionCard(next) {
+    if (!next) {
+      return `<section class="card companion">
+        <div class="ch d-only"><div><h3>Your flight companion</h3><p>Your trip support, all in one place.</p></div></div>
+        <div class="chat empty">
+          <span class="ibadge">${icon('plane')}</span>
+          <div><h4>Ready when you are</h4>
+            <p>Book a Cathay flight to unlock your personal flight chat.<br>Already booked? <a href="#/retrieve">Add your booking</a> to your student account.</p>
+            <a class="btn btn-primary" href="#/book">Book a flight ${icon('ext')}</a></div>
+        </div>
+        <p class="lock-note">Your chat opens 7 days before departure.</p></section>`;
+    }
+    const dep = next.segments[0].dep, n = daysUntil(dep);
+    const unlock = new Date(dep); unlock.setDate(unlock.getDate() - 7);
+    const open = n <= 7;
+    const span = Math.max(1, daysBetween(next.bought, unlock)), done = daysBetween(next.bought, new Date());
+    const pct = Math.max(6, Math.min(100, Math.round((done / span) * 100)));
+    const body = open
+      ? `<div class="chat"><div class="chat-row"><span class="ibadge">${icon('sparkle')}</span><div><h4>Your flight chat is open</h4><p>Ask about your trip, baggage, check-in and more.</p></div></div>
+          <div><button class="btn btn-primary" data-action="soon" data-label="Flight chat">Open chat ${icon('ext')}</button></div></div>`
+      : `<div class="chat">
+          <div class="chat-row"><span class="ibadge">${icon('clock')}</span><div>
+            <h4><span class="d-only">Your chat unlocks 7 days before departure</span><span class="m-only">Chat unlocks 7 days before</span></h4>
+            <p class="d-only">We’ll open your personal flight chat on ${longDay(unlock)}. Until then, explore student travel tips and offers.</p>
+            <p class="m-only">${shortDay(unlock)} · ${plural(n, 'day')} until your flight</p></div></div>
+          <div class="prog" role="progressbar" aria-label="Time until your chat unlocks" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+          <p class="days-left d-only">${plural(n, 'day')} to go</p>
+          <p class="m-note m-only muted sm">Until then, explore travel tips and offers.</p></div>`;
+    return `<section class="card companion">
+      <div class="ch d-only"><span class="ibadge">${icon('sparkle')}</span><div><h3>Your flight companion</h3><p>Ask about your trip, baggage, check-in and more.</p></div></div>
+      ${body}
+      ${open ? '' : '<p class="lock-note d-only">Chat is locked until your 7-day window begins.</p>'}
+    </section>`;
+  }
+
+  const exclCard = (next) => `<a class="excl" href="#/offers">
+    <span class="lab d-only">Cathay Student exclusives</span>
+    <h3><span class="d-only">More ways to make every mile count.</span><span class="m-only">Student-exclusive offers</span></h3>
+    <span class="go"><span class="d-only">Explore offers</span><span class="m-only">${next ? 'Explore' : 'Explore student deals'}</span><span class="m-only">${icon('ext')}</span></span>
+    <span class="arrow d-only">${icon('ext')}</span><span class="spark m-only">${icon('sparkle')}</span></a>`;
+
+  const quickLinks = () => `<section class="card ql d-only"><h4>Quick links</h4>
+    <a class="qrow" href="#/baggage">${icon('bag')}<div><b>Student baggage</b><span class="s">Know your allowance</span></div></a>
+    <a class="qrow" href="#/rewards">${icon('gift')}<div><b>Student perks</b><span class="s">Free adapter, invites, graduation gift</span></div></a>
+    <button class="qrow" type="button" data-action="soon" data-label="Campus community">${icon('ring')}<div><b>Campus community</b><span class="s">Connect with student travellers</span></div></button></section>`;
+
+  const activityRow = (a) => `<div class="card act"><span class="ibadge">${icon('sparkle')}</span>
+    <div><b>${esc(a.title)}</b><span class="s">${fmtDate(a.date + 'T12:00', { day: 'numeric', month: 'short', year: 'numeric' })} · ${esc(a.note)}</span></div>
+    <b class="pts">+${pts(a.pts)} pts</b></div>`;
+
+  function signedOutHome() {
+    return `<div class="home noflight">
+      <header class="pagehead"><div><p class="crumb">Overview / Student home</p><h1>Welcome to Cathay Student</h1>
+        <p class="sub">Sign in to see your points and flights, or find an existing booking.</p></div></header>
+      <section class="points"><div class="pts-main"><span class="lab">Your student points</span>
+        <div class="pts-num sm-num">Sign in to see your balance</div><a class="btn btn-lime" href="#/signin">Sign in / up</a></div></section>
+      <div class="g2 mid" style="margin-top:20px">
+        <section class="card companion"><h3>Already booked?</h3><p class="sub" style="margin-bottom:16px">Find your booking with its reference and your family name.</p>
+          <a class="btn btn-primary" href="#/retrieve">Retrieve booking</a></section>
+        ${exclCard(null)}
+      </div></div>`;
+  }
+
   views.home = () => {
+    if (!user) return signedOutHome();
     const next = upcoming()[0];
     const h = new Date().getHours();
     const greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-    const offers = ['SIN', 'NRT', 'ICN', 'BKK', 'SYD', 'LHR'].map((c) => {
-      const hue = hash(c) % 360;
-      return `<button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,hsl(${hue} 50% 30%),hsl(${(hue + 50) % 360} 60% 50%))">
-        <span class="muted-w sm">From Hong Kong</span><b>${city(c)}</b><span>from ${money(basePrice('HKG', c))}</span></button>`;
-    }).join('');
-    return `
-    <section class="hero">
-      <p class="eyebrow">${greet}</p>
-      <h1>${user ? `Welcome back, ${esc(user.firstName)}` : 'Where to next?'}${user && user.verified ? ' ' + tick('tick-lg') : ''}</h1>
-      <p class="hero-sub">Book, check in and manage every trip in one place.</p>
-      <div class="quick">
-        <a href="#/book">${icon('plane')}<span>Book a trip</span></a>
-        <a href="#/trips">${icon('briefcase')}<span>Manage booking</span></a>
-        <a href="${next && canCheckIn(next) ? '#/trip/' + next.ref : '#/retrieve'}">${icon('check')}<span>Check in</span></a>
-        <a href="#/status">${icon('clock')}<span>Flight status</span></a>
-      </div>
-    </section>
-    ${user && !user.verified ? `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your .edu email to earn a green tick on your profile.</span></span>${icon('arrow')}</a>` : ''}
-    <div class="cols">
-      <section>
-        <h2>Your next trip</h2>
-        ${next ? `<div class="card next">
-            <div class="row between"><b class="lg">${tripLabel(next)}</b><span class="pill">${countdown(next.segments[0].dep)}</span></div>
-            ${segmentCard(next.segments[0], next, 0)}
-            <div class="row gap">
-              <a class="btn btn-primary" href="#/trip/${next.ref}">${canCheckIn(next) && !next.checkedIn ? 'Check in now' : 'View trip'}</a>
-              ${next.checkedIn ? `<a class="btn btn-ghost" href="#/boarding/${next.ref}/0">Boarding pass</a>` : ''}
-            </div></div>`
-          : `<div class="card empty">${user ? 'No upcoming trips yet.' : 'Sign in to see your trips.'} <a href="#/book">Plan one →</a></div>`}
-      </section>
-      <section>
-        <h2>Membership</h2>
-        ${user ? memberCard() : `<div class="card empty">Join Aurelia Club to earn miles on every flight.<br><br><a class="btn btn-primary" href="#/signin">Sign in / up</a></div>`}
-      </section>
-    </div>
-    <h2>Latest offers <span class="muted sm">· Origin Hong Kong</span></h2>
-    <div class="offers">${offers}</div>`;
+    const ini = esc(user.firstName[0] + user.lastName[0]);
+    return `<div class="home ${next ? '' : 'noflight'}">
+      <header class="pagehead">
+        <div>
+          <p class="crumb d-only">Overview / Student home</p>
+          <h1 class="${next ? '' : 'd-only'}"><span class="g">${greet},</span> <span class="n">${esc(user.firstName)}</span>${user.verified ? ' ' + tick('tick-lg') : ''}</h1>
+          ${next ? '' : '<h1 class="m-only">Your next journey</h1>'}
+          <p class="sub d-only">Your next journey starts here. Here’s your student snapshot.</p>
+          <p class="sub m-only">${next ? 'Your next journey starts here.' : 'Your flight companion lives here.'}</p>
+        </div>
+        <div class="head-actions d-only"><a class="circle" href="#/home" aria-label="Overview">${icon('home')}</a><a class="pillbtn" href="#/profile" aria-label="Account settings">${ini} ${icon('ext')}</a></div>
+      </header>
+      <div class="g2">${pointsCard()}${next ? nextFlightCard(next) : noFlightCard()}</div>
+      <div class="sect d-only"><h2>Made for your next journey</h2><p class="sub">Student-only tools, ready when you are.</p></div>
+      <div class="sect m-only"><h2>Your flight companion</h2>${next ? '<p class="sub">Your personal trip support</p>' : ''}</div>
+      <div class="g2 mid">${companionCard(next)}<div class="rcol">${exclCard(next)}${quickLinks()}</div></div>
+      <div class="d-only"><div class="sect-head"><h3>Recent activity</h3>${link('#/rewards', 'View all')}</div>${activityRow(user.activity[0])}</div>
+    </div>`;
   };
 
   function memberCard() {
-    const pct = Math.min(100, Math.round((user.tierPoints / user.nextTierAt) * 100));
     return `<div class="member">
-      <div class="row between"><span class="eyebrow-w">Aurelia Club</span><span class="tier">${esc(user.tier)}</span></div>
+      <div class="row between"><span class="lab">Student member</span>${currentTier() !== user.tier ? `<span class="tier">${esc(currentTier())} · graduation gift</span>` : ''}</div>
       <div class="member-name">${esc(user.firstName)} ${esc(user.lastName)}${user.verified ? ' ' + tick() : ''}</div>
       <div class="mono">${esc(user.memberId)}</div>
-      <div class="row between stats"><div><span class="muted-w sm">Miles</span><b>${user.points.toLocaleString()}</b></div>
-        <div><span class="muted-w sm">Status points</span><b>${user.tierPoints} / ${user.nextTierAt}</b></div></div>
-      <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="muted-w sm">${user.nextTierAt - user.tierPoints} more status points to ${esc(user.nextTier)}</div>
+      <div class="row between stats"><div><span class="lab">Student points</span><b>${pts(spLeft(perks()))}</b></div>
+        <div><span class="lab">Asia Miles</span><b>${pts(asiaMiles())}</b></div>
+        <div><span class="lab">Earned this month</span><b>+${pts(user.earnedThisMonth)}</b></div></div>
     </div>`;
   }
+
+  views.rewards = () => `
+    <div class="narrow wide">
+      <header class="pagehead"><div><p class="crumb">Points &amp; rewards</p><h1>Your student points</h1>
+        <p class="sub">Earn on flights, campus and partners; spend on student rewards; 70% of what's left becomes Asia Miles when you graduate.</p></div></header>
+      ${pointsCard()}
+      ${perksBody()}
+      <div class="sect-head"><h3>Recent activity</h3></div>
+      <div class="stack" style="margin-top:0">${user.activity.map(activityRow).join('')}</div>
+    </div>`;
+
+  const OFFER_TONES = [['#0b4a35', '#2f8a62'], ['#164b36', '#3f9a72'], ['#27502f', '#8aa83a'], ['#3a4f1d', '#a9c24a'], ['#0f3d4a', '#3f8f9a'], ['#5a3a14', '#d98b3f']];
+  views.offers = () => {
+    const cards = ['SIN', 'NRT', 'ICN', 'BKK', 'SYD', 'LHR'].map((c, i) => `
+      <button class="offer" data-action="offer" data-code="${c}" style="background:linear-gradient(145deg,${OFFER_TONES[i][0]},${OFFER_TONES[i][1]})">
+        <span>From Hong Kong</span><b>${esc(city(c))}</b><span>Fares from ${money(basePrice('HKG', c))}</span></button>`).join('');
+    const verify = !user ? '' : user.verified
+      ? `<div class="banner">${tick()}<span><b>Student status verified</b><br><span class="muted sm">Verified with ${esc(user.verified.email)}.</span></span></div>`
+      : `<a class="banner" href="#/verify">${tick('tick-off')}<span><b>Verify your student status</b><br><span class="muted sm">Use your .edu email to unlock student offers and earn a green tick.</span></span>${icon('arrow')}</a>`;
+    return `<div class="narrow wide">
+      <header class="pagehead"><div><p class="crumb">Student offers</p><h1>Student offers</h1>
+        <p class="sub">Fares and perks picked for students flying from Hong Kong.</p></div></header>
+      ${verify}<div class="offers" style="margin-top:0">${cards}</div></div>`;
+  };
 
   views.book = () => {
     const s = search;
     return `
     <div class="narrow">
-      <h1>Book a trip</h1>
+      <h1>Book a flight</h1>
       <form id="searchForm" class="card form">
         <div class="tabs">
           ${['return', 'one way'].map((t) => `<button type="button" class="${s.type === t ? 'on' : ''}" data-action="set-type" data-type="${t}">${t === 'return' ? 'Return' : 'One way'}</button>`).join('')}
@@ -403,13 +639,13 @@
     const list = tripsTab === 'upcoming' ? upcoming() : past();
     return `
     <div class="narrow">
-      <h1>My trips</h1>
+      <div class="row between"><h1>My flights</h1><a class="btn btn-primary sm-btn" href="#/book">Book a flight</a></div>
       <div class="tabs">
         <button class="${tripsTab === 'upcoming' ? 'on' : ''}" data-action="trips-tab" data-tab="upcoming">Upcoming (${upcoming().length})</button>
         <button class="${tripsTab === 'past' ? 'on' : ''}" data-action="trips-tab" data-tab="past">Past & cancelled (${past().length})</button>
       </div>
       <div class="stack">${list.map(tripCard).join('') || '<div class="card empty">Nothing here yet.</div>'}</div>
-      <a class="btn btn-ghost block" href="#/retrieve">Retrieve another booking</a>
+      <div class="two"><a class="btn btn-ghost" href="#/retrieve">Retrieve a booking</a><a class="btn btn-ghost" href="#/tools">Travel tools</a></div>
     </div>`;
   };
 
@@ -451,7 +687,7 @@
     <div class="narrow">
       ${backLink('#/trip/' + ref, 'Back to trip')}
       <div class="pass">
-        <div class="pass-top"><span>Aurelia Air · Boarding pass</span><span class="row gap-sm">${me ? `<span class="pass-tag">${icon('cap')} STUDENT</span>` : ''}${esc(t.cabin)}</span></div>
+        <div class="pass-top"><span>Cathay Student · Boarding pass</span><span class="row gap-sm">${me ? `<span class="pass-tag">${icon('cap')} STUDENT</span>` : ''}${esc(t.cabin)}</span></div>
         <div class="pass-name">${esc((p.last + '/' + p.first).toUpperCase())}</div>
         <div class="pass-route"><div><b>${s.from}</b><span>${city(s.from)}</span></div>${icon('plane', 'big')}<div class="right"><b>${s.to}</b><span>${city(s.to)}</span></div></div>
         <div class="pass-grid">
@@ -461,6 +697,8 @@
           <div><span>Seat</span><b>${esc(s.seat)}</b></div><div><span>Group</span><b>${t.cabin === 'Economy' ? '4' : '1'}</b></div>
         </div>
         ${me ? `<div class="pass-zone">${icon('cap')} ${nb.length ? 'Seated next to ' + nb.map((x) => `${esc(x.name)} (${esc(x.uni)})`).join(' and ') : 'Student'}</div>` : ''}
+        ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(REWARDS.find((x) => x.id === r.id).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
+        ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
         <div class="qr">${barcode(seed)}</div>
         <div class="muted center sm">DEMO PASS — not valid for travel · ${t.ref}</div>
@@ -480,7 +718,7 @@
   const seatEl = (id, cls, inner = '', action = '', label = '') => action
     ? `<button class="seat ${cls}" data-action="${action}" data-seat="${id}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</button>`
     : `<span class="seat ${cls}" aria-label="Seat ${id}${esc(label)}" title="${id}${esc(label)}">${inner}</span>`;
-  const legend = (items) => `<div class="legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
+  const legend = (items) => `<div class="seat-legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
 
   views.seats = (ref, idx) => {
     const t = findTrip(ref), i = Number(idx), s = t && t.segments[i];
@@ -603,7 +841,7 @@
     const p = user.prefs;
     return `
     <div class="narrow">
-      <h1>Profile</h1>
+      <h1>Settings</h1>
       ${memberCard()}
       <div class="card">
         <h3>Personal details</h3>
@@ -618,7 +856,8 @@
         <h3>Student verification</h3>
         ${user.verified
           ? `<p class="muted" style="margin-top:0">${tick()} Verified with <b>${esc(user.verified.email)}</b>.</p>
-             <button class="btn btn-ghost block sm-btn" data-action="unverify">Remove verification (demo)</button>`
+             <a class="btn btn-primary block" href="#/rewards">${icon('gift')} Student perks</a>
+             <button class="btn btn-ghost block sm-btn" data-action="unverify" style="margin-top:8px">Remove verification (demo)</button>`
           : `<p class="muted" style="margin-top:0">Confirm a university email (.edu) to get a green tick next to your name.</p>
              <a class="btn btn-primary block" href="#/verify">Verify student status</a>`}
       </div>
@@ -639,14 +878,14 @@
   };
 
   views.verify = () => {
-    const back = vs.returnTo ? backLink(vs.returnTo, 'Back to your booking') : backLink('#/profile', 'Profile');
+    const back = vs.returnTo ? backLink(vs.returnTo, 'Back') : backLink('#/profile', 'Settings');
     const done = user.verified || vs.step === 'done';
     if (done) {
       const v = user.verified;
       return `<div class="narrow">${back}
         <div class="card verify-done">${tick('tick-xl')}<h1>You're verified</h1>
           <p class="muted">${esc(user.firstName)} ${esc(user.lastName)} now has a green tick next to their name.${v ? '<br>Verified with <b>' + esc(v.email) + '</b>.' : ''}</p>
-          <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">${vs.returnTo ? 'Back to your booking' : 'Back to home'}</a></div></div>`;
+          <a class="btn btn-primary block" href="${vs.returnTo || '#/home'}">${vs.returnTo ? 'Continue' : 'Back to home'}</a></div></div>`;
     }
     const err = vs.msg ? `<p class="err" role="alert">${esc(vs.msg)}</p>` : '';
     if (vs.step === 'code') {
@@ -664,13 +903,14 @@
     }
     return `<div class="narrow">${back}
       <h1>Verify student status</h1>
+      ${store.get('invitedBy', '') ? `<div class="sz-choice yes"><span>${icon('share')} A friend invited you (${esc(store.get('invitedBy', ''))}). Verify and you'll both get ${PERKS.referralMiles.toLocaleString()} miles after your first flight.</span></div>` : ''}
       <p class="muted">Enter your university email. We'll send a 6-digit code — any address whose domain includes <b>.edu</b> works (e.g. <span class="mono">name@uni.edu</span>, <span class="mono">name@uni.edu.hk</span>).</p>
       <form id="verifyEmailForm" class="card form" novalidate>
         <label class="field"><span>University email</span><input type="email" name="email" placeholder="name@university.edu" value="${esc(vs.email)}" required autocomplete="email"></label>
         ${err}
         <button class="btn btn-primary block" type="submit">Send code</button>
       </form>
-      <p class="muted sm">Aurelia Student Verify is a demo feature of a fictional airline. Your address is used only to send the code.</p>
+      <p class="muted sm">Student verification is a demo feature. Your address is used only to send the code.</p>
     </div>`;
   };
 
@@ -699,7 +939,7 @@
   views.status = () => `
     <div class="narrow">${backLink('#/tools', 'Travel tools')}<h1>Flight status</h1>
       <form id="statusForm" class="card form">
-        <label class="field"><span>Flight number</span><input name="num" placeholder="e.g. AU 507" required value="${upcoming()[0] ? esc(upcoming()[0].segments[0].number) : ''}"></label>
+        <label class="field"><span>Flight number</span><input name="num" placeholder="e.g. CX 751" required value="${upcoming()[0] ? esc(upcoming()[0].segments[0].number) : ''}"></label>
         <label class="field"><span>Date</span><input type="date" name="date" value="${todayStr()}"></label>
         <button class="btn btn-primary block" type="submit">Check status</button></form>
       <div id="statusOut"></div></div>`;
@@ -724,30 +964,118 @@
         <p id="retrieveErr" class="err" hidden></p>
         <button class="btn btn-primary block" type="submit">Continue</button>
       </form>
-      <p class="muted sm">Demo hint: try <b class="mono">K7M2QX</b> with family name <b>Doe</b>.</p>
+      <p class="muted sm">Demo hint: try <b class="mono">K7M2QX</b> with family name <b>Koirala</b>.</p>
     </div>`;
 
   views.signin = () => `
     <div class="signin">
-      <div class="signin-brand"><h1>Aurelia Club</h1><p>Earn miles, unlock lounges and manage your trips.</p></div>
+      <div class="signin-brand"><h1>Cathay Student</h1><p>Earn points, unlock student offers and manage your flights.</p></div>
       <div class="narrow">
         <h1 class="mob-only">Sign in</h1>
         <form id="signinForm" class="card form">
-          <label class="field"><span>Email or member number</span><input name="email" value="john.doe@example.com" required></label>
+          <label class="field"><span>Email or member number</span><input name="email" value="abhilekh@example.com" required></label>
           <label class="field"><span>Password</span><input type="password" name="password" value="demo1234" required></label>
           <p id="signinErr" class="err" hidden></p>
           <button class="btn btn-primary block" type="submit">Sign in</button>
-          <button class="btn btn-ghost block" type="button" data-action="demo-login">Continue as John Doe (demo)</button>
+          <button class="btn btn-ghost block" type="button" data-action="demo-login">Continue as Abhilekh (demo)</button>
         </form>
-        <p class="muted sm center">Demo credentials are pre-filled. This is a fictional airline; no real accounts exist.</p>
+        <p class="muted sm center">Demo credentials are pre-filled. This is a concept prototype; no real accounts exist.</p>
       </div></div>`;
+
+  /* Student perks section of the Points & rewards page. */
+  function perksBody() {
+    if (!user.verified) return studentGate(toISO(new Date()));
+    const p = perks(), m = perkMiles(p), refs = p.referrals || [];
+    const country = studyCountry(), plug = SZ.countryPlug(country), at = adapterTrip(p), claimed = adapterClaimed(p);
+    const adapterRow = (t, right) => `<div class="perk-row"><div><b>${esc(city(t.segments[0].from))} → ${esc(city(t.segments[0].to))}</b><div class="muted sm">${fmtDate(t.segments[0].dep, { day: 'numeric', month: 'short', year: 'numeric' })} · Type ${esc(plug)}</div></div>${right}</div>`;
+    const adapter = !country ? '<p class="muted sm">We couldn\'t tell your university\'s country from your email.</p>'
+      : claimed ? adapterRow(at, '<span class="badge ok">Claimed · collect on board</span>')
+      : at ? adapterRow(at, `<button class="btn btn-primary sm-btn" data-action="claim-adapter" data-ref="${at.ref}">Claim free</button>`)
+      : `<p class="muted sm">It will appear here when you book your first flight to ${esc(countryName(country))}.</p>`;
+    const friends = refs.map((r, i) => `<div class="perk-row"><div><b>${esc(r.name)}</b><div class="muted sm">${esc(r.uni)} · ${r.flown ? 'took their first flight' : 'verified · first flight pending'}</div></div>
+      ${r.flown ? `<span class="badge ok">+${PERKS.referralMiles.toLocaleString()} miles</span>` : `<button class="btn btn-ghost sm-btn" data-action="ref-flown" data-i="${i}">Simulate flight</button>`}</div>`).join('');
+    const boost = gradBoostUntil(p), nextTier = SZ.tierUp(user.tier);
+    const gradMonth = p.gradMonth || (user.verified.until || '').slice(0, 7);
+    return `
+    <div class="perks-body">
+      <div class="sect-head"><h3>Student perks</h3>${verifiedLabel()}</div>
+      <p class="muted sm">Unlocked by your verified student membership. No promo codes.</p>
+      <div class="card balances">
+        <div><span class="eyebrow">Student points</span><b class="sp">${spLeft(p).toLocaleString()}</b>
+          <p class="muted sm">Earned on flights (${PERKS.spRate}× the miles), campus and partners while you study. Spend them on student rewards; ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles when you graduate.</p></div>
+        <div><span class="eyebrow">Asia Miles</span><b>${asiaMiles().toLocaleString()}</b>
+          <p class="muted sm">Usable now: invites, the graduation gift and miles from before you joined${m.pending ? ` (+${m.pending.toLocaleString()} pending)` : ''}.</p></div>
+      </div>
+
+      <div class="card perk">
+        <div class="perk-head">${icon('plug')}<div><h3>Free travel adapter</h3><p class="muted sm">${country ? `New to ${esc(countryName(country))}? Get a free Type ${esc(plug)} adapter on your first flight there, handed to you on board by the crew.` : 'A free adapter for your university\'s country, handed to you on board.'} Once per study programme.</p></div></div>
+        ${adapter}
+      </div>
+
+      <div class="card perk">
+        <div class="perk-head">${icon('share')}<div><h3>Invite friends</h3><p class="muted sm">When a friend verifies as a student with your link and takes their first flight, you both get ${PERKS.referralMiles.toLocaleString()} miles. Up to ${PERKS.referralCap} friends a year.</p></div></div>
+        <div class="ref-link"><span class="mono">${esc(refLink())}</span><button class="btn btn-primary sm-btn" data-action="ref-copy">${navigator.share ? 'Share' : 'Copy'}</button></div>
+        ${friends}
+        <button class="btn btn-ghost block sm-btn" data-action="ref-demo">Simulate a friend joining (demo)</button>
+      </div>
+
+      <div class="card perk">
+        <div class="perk-head">${icon('tag')}<div><h3>Student points</h3><p class="muted sm">Your flights earn ${PERKS.spRate} student points for every Asia Mile a normal member would earn (instead of miles). Spend them on student rewards now; when you graduate, ${Math.round(PERKS.spConvert * 100)}% of what's left becomes Asia Miles and the rest expires.</p></div></div>
+        ${p.graduated
+          ? `<div class="sp-row"><div><b>${(p.gradPoints || 0).toLocaleString()}</b><span>student points left</span></div>${icon('arrow')}<div><b>${(p.gradConverted || 0).toLocaleString()}</b><span>Asia Miles credited</span></div></div>`
+          : `<div class="sp-row"><div><b>${spLeft(p).toLocaleString()}</b><span>student points</span></div>${icon('arrow')}<div><b>${spConverted(spLeft(p)).toLocaleString()}</b><span>Asia Miles at graduation</span></div></div>
+             <button class="btn btn-ghost block sm-btn" data-action="sp-demo">Simulate a term flight (demo)</button>
+             <h3 class="rw-title">Spend your points</h3>
+             <p class="muted sm" style="margin:0">Also available on each Economy trip page, under <b>Pay with student points</b>.</p>
+             ${REWARDS.map((rw) => `<div class="perk-row reward">
+               <div class="rw-info">${icon(rw.icon)}<div><b>${rw.name}</b> <span class="rw-pts">${rw.pts.toLocaleString()} pts</span><div class="muted sm">${rw.note}</div></div></div>
+               <form class="rw-form" data-reward="${rw.id}">
+                 <select name="ref" aria-label="Trip for ${rw.name}">${upcoming().filter((t) => t.cabin === 'Economy').map((t) => {
+                   const used = (p.redeemed || []).some((r) => r.id === rw.id && r.ref === t.ref);
+                   return `<option value="${t.ref}" ${used ? 'disabled' : ''}>${esc(tripLabel(t))} · ${fmtDate(t.segments[0].dep, { day: 'numeric', month: 'short' })}${used ? ' · added' : ''}</option>`;
+                 }).join('')}</select>
+                 <button class="btn btn-primary sm-btn" type="submit" ${spLeft(p) < rw.pts ? 'disabled' : ''}>Use</button>
+               </form></div>`).join('')}
+             ${(p.redeemed || []).length ? `<p class="muted sm">Added: ${p.redeemed.map((r) => `${esc(rewardName(r.id))} (${esc(r.ref)})`).join(', ')}</p>` : ''}`}
+      </div>
+
+      <div class="card perk">
+        <div class="perk-head">${icon('cap')}<div><h3>Graduation gift</h3><p class="muted sm">When you graduate, we celebrate with you.</p></div></div>
+        ${p.graduated
+          ? `<div class="sz-choice yes"><span>Congratulations, graduate!</span></div>
+             <ul class="perk-list"><li>${icon('check')} ${esc(nextTier)} status ${boost ? `until ${fmtDate(toISO(boost), { day: 'numeric', month: 'short', year: 'numeric' })}` : '(ended)'}</li>
+             <li>${icon('check')} ${PERKS.gradMiles.toLocaleString()} bonus miles credited</li>
+             <li>${icon('check')} ${(p.gradConverted || 0).toLocaleString()} Asia Miles from your student points</li></ul>
+             <button class="btn btn-ghost block sm-btn" data-action="grad-undo">Undo graduation (demo)</button>`
+          : `<ul class="perk-list"><li>${icon('check')} ${esc(nextTier)} status for ${PERKS.boostMonths} months (one tier up)</li>
+             <li>${icon('check')} ${PERKS.gradMiles.toLocaleString()} bonus miles</li>
+             <li>${icon('check')} ${Math.round(PERKS.spConvert * 100)}% of your student points converted to Asia Miles</li></ul>
+             <form id="gradForm" class="row gap-sm grad-form">
+               <label class="field"><span>Expected graduation</span><input type="month" name="grad" value="${esc(gradMonth)}" required></label>
+               <button class="btn btn-ghost sm-btn" type="submit">Save</button>
+             </form>
+             ${gradMonth ? `<p class="muted sm">Your gift unlocks when you graduate in ${fmtDate(gradMonth + '-01T12:00', { month: 'long', year: 'numeric' })}.</p>` : ''}
+             <button class="btn btn-primary block sm-btn" data-action="grad-demo">Simulate graduation (demo)</button>`}
+      </div>
+    </div>`;
+  };
+
+  views.perks = () => redirect('#/rewards');
+
+  /* Invite link: remember who invited, then verify. */
+  views.r = (code) => {
+    store.set('invitedBy', String(code || '').toUpperCase());
+    if (user && user.verified) { toast('You are already a verified student.'); return redirect('#/rewards'); }
+    vs.returnTo = '#/rewards';
+    return redirect(user ? '#/verify' : '#/signin');
+  };
 
   const notFound = () => `<div class="narrow"><div class="card empty">We couldn't find that page. <a href="#/home">Go home</a></div></div>`;
   function redirect(to) { setTimeout(() => { location.hash = to; }, 0); return ''; }
 
   /* ---------- router ---------- */
-  const PROTECTED = new Set(['trips', 'profile', 'verify']);
-  const NAV_GROUP = { home: 'home', book: 'book', results: 'book', confirm: 'book', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', profile: 'profile', verify: 'profile', signin: 'profile', tools: 'tools', status: 'tools', baggage: 'tools', retrieve: 'tools', timetable: 'tools' };
+  const PROTECTED = new Set(['trips', 'profile', 'verify', 'rewards', 'perks']);
+  const NAV_GROUP = { home: 'home', book: 'trips', results: 'trips', confirm: 'trips', trips: 'trips', trip: 'trips', boarding: 'trips', seats: 'trips', planner: 'trips', retrieve: 'trips', tools: 'trips', status: 'trips', baggage: 'trips', timetable: 'trips', rewards: 'rewards', perks: 'rewards', r: 'rewards', offers: 'offers', profile: 'profile', verify: 'profile', signin: 'profile' };
 
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -767,12 +1095,15 @@
 
   function renderChrome(active) {
     document.querySelectorAll('[data-nav]').forEach((el) => el.classList.toggle('on', el.dataset.nav === active));
+    const ini = user ? esc(user.firstName[0] + user.lastName[0]) : '';
     const slot = $('#userSlot');
+    slot.href = user ? '#/profile' : '#/signin';
     slot.innerHTML = user
-      ? `<a class="chip" href="#/profile"><span class="avatar">${esc(user.firstName[0] + user.lastName[0])}${user.verified ? tick('tick-av') : ''}</span><span class="chip-text">${esc(user.firstName)}${user.verified ? ' ' + tick() : ''} · ${esc(user.tier)}</span></a>`
-      : `<a class="chip signin-chip" href="#/signin">Sign in / up</a>`;
-    const tabProfile = $('#tabProfile');
-    if (tabProfile) tabProfile.querySelector('span').textContent = user ? 'Profile' : 'Sign in';
+      ? `<span class="avatar">${ini}${user.verified ? tick('tick-av') : ''}</span><div><b>${esc(user.firstName)} ${esc(user.lastName[0])}.${user.verified ? ' ' + tick() : ''}</b><span class="s">${currentTier() !== user.tier ? esc(currentTier()) + ' · graduation gift' : 'Student member'}</span></div>`
+      : `<span class="avatar">${icon('user')}</span><div><b>Sign in / up</b><span class="s">See your points and flights</span></div>`;
+    const m = $('#mAvatar');
+    m.href = user ? '#/profile' : '#/signin';
+    m.innerHTML = user ? ini + (user.verified ? tick('tick-av') : '') : icon('user');
   }
 
   /* ---------- actions ---------- */
@@ -826,7 +1157,13 @@
       t.segments[i].seat = seatSel.seat;
       seatSel.key = '';
       if (i < t.segments.length - 1) { saveTrips(); location.hash = `#/seats/${t.ref}/${i + 1}`; return; }
-      t.checkedIn = true; saveTrips(); toast('Checked in. Boarding pass ready.');
+      t.checkedIn = true; saveTrips();
+      if (user && user.verified && !t.studentPoints) {
+        const p = perks();
+        t.studentPoints = Math.round(t.segments.reduce((n, s) => n + flightMiles(s, t.cabin), 0) * PERKS.spRate);
+        p.sp = (p.sp || 0) + t.studentPoints; savePerks(p); saveTrips();
+        toast(`Checked in. +${t.studentPoints.toLocaleString()} student points`);
+      } else toast('Checked in. Boarding pass ready.');
       location.hash = '#/trip/' + t.ref;
     },
     'auto-seat'() {
@@ -858,11 +1195,52 @@
       const t = findTrip(el.dataset.ref); t.status = 'Cancelled'; saveTrips(); toast('Booking cancelled.'); render();
     },
     signout() { store.set('loggedOut', true); user = null; toast('Signed out.'); location.hash = '#/home'; render(); },
-    'demo-login'() { store.set('loggedOut', false); loadState(); toast('Signed in as John Doe'); location.hash = '#/home'; render(); },
-    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('sales', {}); store.set('seatplans', {}); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
+    'demo-login'() { store.set('loggedOut', false); loadState(); toast('Signed in as Abhilekh'); location.hash = '#/home'; render(); },
+    'reset-demo'() { store.set('trips', null); store.set('prefs', null); store.set('verified', null); store.set('sales', {}); store.set('seatplans', {}); store.set('perks', {}); store.set('invitedBy', ''); store.set('loggedOut', false); Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); loadState(); toast('Demo data reset.'); location.hash = '#/home'; render(); },
     unverify() { store.set('verified', null); user.verified = null; Object.assign(vs, { step: 'email', email: '', demo: false, demoCode: '', msg: '', localCode: null }); toast('Verification removed.'); render(); },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
+    'claim-adapter'(el) {
+      const p = perks(), t = findTrip(el.dataset.ref);
+      p.adapter = { email: user.verified.email, ref: t.ref, at: toISO(new Date()) };
+      savePerks(p); rerender();
+      flashTick(`Type ${SZ.plugFor(t.segments[0].to)} adapter claimed`);
+    },
+    'ref-copy'() {
+      const link = refLink();
+      if (navigator.share) { navigator.share({ title: 'Fly with me on Cathay', text: 'Verify as a student with my link and we both get bonus miles.', url: link }).catch(() => {}); return; }
+      (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Invite link copied'), () => toast(link));
+    },
+    'ref-demo'() {
+      const p = perks(), refs = p.referrals || [];
+      if (refs.length >= Math.min(PERKS.referralCap, SZ.FRIENDS.length)) return toast('Invite limit reached for this year.');
+      const [name, uni] = SZ.FRIENDS[refs.length];
+      p.referrals = [...refs, { name, uni, flown: false }];
+      savePerks(p); rerender(); toast(`${name} verified with your link`);
+    },
+    'ref-flown'(el) {
+      const p = perks(), r = p.referrals[Number(el.dataset.i)];
+      r.flown = true; savePerks(p); rerender();
+      toast(`+${PERKS.referralMiles.toLocaleString()} miles for you and ${r.name}`);
+    },
+    'sp-demo'() {
+      // A typical term flight: Moscow → Hong Kong in Economy.
+      const p = perks(), pts = Math.round(flightMiles({ from: 'SVO', to: 'HKG' }, 'Economy') * PERKS.spRate);
+      p.sp = (p.sp || 0) + pts; savePerks(p); rerender();
+      toast(`+${pts.toLocaleString()} student points`);
+    },
+    'grad-demo'() {
+      const p = perks();
+      p.graduated = toISO(new Date()); p.gradPoints = spLeft(p); p.gradConverted = spConverted(p.gradPoints); savePerks(p); rerender();
+      showModal('Congratulations, graduate!', `Enjoy ${SZ.tierUp(user.tier)} status for ${PERKS.boostMonths} months, ${PERKS.gradMiles.toLocaleString()} bonus miles and ${p.gradConverted.toLocaleString()} Asia Miles from your student points.`);
+    },
+    'grad-undo'() { const p = perks(); delete p.graduated; delete p.gradConverted; delete p.gradPoints; savePerks(p); rerender(); },
+    redeem(el) {
+      const rw = REWARDS.find((r) => r.id === el.dataset.id), t = findTrip(el.dataset.ref);
+      const err = redeem(t, rw);
+      if (err) return toast(err);
+      rerender(); flashTick(`${rw.name} added`);
+    },
     'seat-answer'(el) {
       const t = findTrip(el.dataset.ref);
       t.studentSeat = el.dataset.v === 'yes';
@@ -928,11 +1306,20 @@
       startVerify(f.get('email'));
     } else if (id === 'verifyCodeForm') {
       confirmVerify(f.get('code'));
+    } else if (form.classList.contains('rw-form')) {
+      const rw = REWARDS.find((r) => r.id === form.dataset.reward), t = findTrip(f.get('ref'));
+      const err = redeem(t, rw);
+      if (err) return toast(err);
+      rerender(); toast(`${rw.name} added to ${tripLabel(t)} · −${rw.pts.toLocaleString()} student points`);
+    } else if (id === 'gradForm') {
+      const p = perks();
+      p.gradMonth = f.get('grad'); savePerks(p); rerender();
+      toast('Graduation date saved. We\'ll remind you a month before.');
     } else if (id === 'prefsForm') {
       const prefs = { seat: f.get('seat'), meal: f.get('meal'), notifications: f.get('notifications') === 'on' };
       store.set('prefs', prefs); user.prefs = prefs; toast('Preferences saved.');
     } else if (id === 'statusForm') {
-      const num = String(f.get('num')).trim().toUpperCase().replace(/^AU\s*/, 'AU ');
+      const num = String(f.get('num')).trim().toUpperCase().replace(/^CX\s*/, 'CX ');
       const known = trips.flatMap((t) => t.segments).find((s) => s.number === num);
       const seg = known || (() => { const r = mulberry32(hash(num)); const a = AIRPORTS[Math.floor(r() * 5)], b = AIRPORTS[5 + Math.floor(r() * 9)];
         const dep = new Date(f.get('date') + 'T' + D.pad(7 + Math.floor(r() * 14)) + ':' + ['00', '15', '30', '45'][Math.floor(r() * 4)]);

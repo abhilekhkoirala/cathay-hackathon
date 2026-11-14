@@ -1,10 +1,10 @@
-/* Aurelia Air demo — student verification logic (AWS Lambda edition).
+/* Cathay Student demo — student verification logic (AWS Lambda edition).
  * Same rules as server.js, but state lives in DynamoDB and the email goes out through SES.
  * Everything AWS-specific is injected (store, mailer), so this file is unit-testable without AWS. */
 'use strict';
 const crypto = require('crypto');
 
-const BRAND = 'Aurelia Student Verify';
+const BRAND = 'Cathay Student Verify';
 const CODE_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -61,7 +61,7 @@ function clientIp(event) {
 function buildEmail(code, firstName) {
   const name = firstName ? ' ' + firstName : '';
   return {
-    subject: `Your Aurelia verification code: ${code}`,
+    subject: `Your Cathay Student verification code: ${code}`,
     text:
 `Hi${name},
 
@@ -69,13 +69,13 @@ Your ${BRAND} code is: ${code}
 
 It expires in 10 minutes. If you didn't request this, you can ignore this email.
 
-Aurelia Air is a fictional airline built for a hackathon demo.`,
+Cathay Student is a concept prototype built for a hackathon demo.`,
     html:
-`<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:440px;margin:auto;padding:24px;color:#14183a">
-  <h2 style="margin:0 0 8px;color:#232e6b">${esc(BRAND)}</h2>
+`<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:440px;margin:auto;padding:24px;color:#10261c">
+  <h2 style="margin:0 0 8px;color:#0b4a35">${esc(BRAND)}</h2>
   <p>Hi${firstName ? ' ' + esc(firstName) : ''}, use this code to verify your student status:</p>
-  <p style="font-size:34px;letter-spacing:8px;font-weight:800;background:#f0f2ff;border-radius:12px;padding:16px;text-align:center;margin:16px 0">${code}</p>
-  <p style="color:#6a6f8f;font-size:13px">It expires in 10 minutes. If you didn't request this, ignore this email.<br>Aurelia Air is a fictional airline built for a hackathon demo.</p>
+  <p style="font-size:34px;letter-spacing:8px;font-weight:800;background:#e8eee2;border-radius:12px;padding:16px;text-align:center;margin:16px 0">${code}</p>
+  <p style="color:#66756b;font-size:13px">It expires in 10 minutes. If you didn't request this, ignore this email.<br>Cathay Student is a concept prototype built for a hackathon demo.</p>
 </div>`,
   };
 }

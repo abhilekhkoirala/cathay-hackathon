@@ -1,4 +1,4 @@
-/* Aurelia Air — Student seating. DEMO data: simulated student passengers and the seat planner.
+/* Cathay Student — Student seating. DEMO data: simulated student passengers and the seat planner.
  * There is no student section: verified students are seated automatically in small groups of 2–3
  * side by side (e.g. 9A 9B 9C, then 13A 13B), from the same university when possible.
  * Every other seat stays on sale. When a paying passenger buys a seat planned for a student,
@@ -26,6 +26,7 @@
     KTM: ['Tribhuvan Univ.', 'Kathmandu Univ.'],
     ALA: ['Nazarbayev Univ.', 'KBTU'],
     SVO: ['Moscow State Univ.', 'HSE Moscow', 'MGIMO'],
+    CDG: ['Sorbonne Univ.', 'Sciences Po', 'HEC Paris'],
   };
   /* How many students fly a route (min, max). Big study destinations are busiest. */
   const BUSY = { LHR: [7, 11], SYD: [6, 10], JFK: [6, 10], SEA: [5, 9], SVO: [8, 12], NRT: [3, 8], ICN: [3, 8], SIN: [3, 8], TPE: [2, 7] };
@@ -76,7 +77,7 @@
     });
   }
 
-  /* Economy cabin layout (Aurelia uses 3-3-3 on wide-bodies, 3-3 on the A321neo). */
+  /* Economy cabin layout (3-3-3 on wide-bodies, 3-3 on the A321neo). */
   function cabin(seg) {
     return /A321/.test(seg.aircraft)
       ? { blocks: [['A', 'B', 'C'], ['H', 'J', 'K']], first: 20, last: 37 }
@@ -216,5 +217,39 @@
     };
   }
 
-  window.AURELIA_SZ = { universityFromEmail, isAdult, flightKey, studentsOn, cabin, allSeats, plan };
+  /* ---------- student perks ---------- */
+
+  /* Plug type(s) used in each country. */
+  const PLUGS = {
+    'Hong Kong SAR': 'G', 'United Kingdom': 'G', Singapore: 'G', UAE: 'G', Japan: 'A', Taiwan: 'A', 'United States': 'A',
+    'South Korea': 'C / F', Russia: 'C / F', Kazakhstan: 'C / F', Thailand: 'A / C', India: 'C / D', Nepal: 'C / D',
+    Australia: 'I', France: 'E',
+  };
+  const countryPlug = (country) => PLUGS[country] || '';
+  const plugFor = (code) => countryPlug((window.AURELIA.airport(code) || {}).country);
+
+  /* Country of the university, from the verified email: cuhk.edu.hk → Hong Kong, ucl.ac.uk → UK, mit.edu → US. */
+  const STUDY_COUNTRIES = {
+    hk: 'Hong Kong SAR', uk: 'United Kingdom', au: 'Australia', sg: 'Singapore', jp: 'Japan', kr: 'South Korea', tw: 'Taiwan',
+    th: 'Thailand', in: 'India', np: 'Nepal', kz: 'Kazakhstan', ae: 'UAE', ru: 'Russia', fr: 'France', edu: 'United States',
+  };
+  const studyCountry = (email) => STUDY_COUNTRIES[String(email || '').toLowerCase().split('.').pop()] || '';
+
+  /* Personal invite code, e.g. JOHN-K7M2: same student, same code. */
+  function referralCode(firstName, email) {
+    const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let h = hash(String(email).toLowerCase()), code = '';
+    for (let i = 0; i < 4; i++) { code += a[h % a.length]; h = Math.floor(h / a.length); }
+    return String(firstName).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8) + '-' + code;
+  }
+  const FRIENDS = [['Mei', 'CUHK'], ['Arjun', 'HKUST'], ['Sofia', 'HKU'], ['Kenji', 'PolyU'], ['Zara', 'CityU'], ['Lucas', 'HKBU']];
+
+    const TIERS = ['Green', 'Silver', 'Gold', 'Diamond'];
+  /* One tier up; a student member (no Cathay tier yet) goes to Silver. */
+  const tierUp = (tier) => (TIERS.includes(tier) ? TIERS[Math.min(TIERS.length - 1, TIERS.indexOf(tier) + 1)] : 'Silver');
+
+  window.AURELIA_SZ = {
+    universityFromEmail, isAdult, flightKey, studentsOn, cabin, allSeats, plan,
+    plugFor, countryPlug, studyCountry, referralCode, FRIENDS, tierUp,
+  };
 })();
