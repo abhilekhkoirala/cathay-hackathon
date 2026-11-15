@@ -377,7 +377,13 @@ function checkin(uid, fid, body = {}) {
  * to a restricted passenger, never on a reserved zone seat for non-students. */
 function autoSeat(f, prefs, ext, layout, uid) {
   const p = f.pax[uid], all = engine.seatsOf(layout), zone = new Set(p.cabin === 'Economy' ? zoneSeats(f, layout) : []);
-  const order = p.student ? [...all.filter((s) => zone.has(s)), ...all.filter((s) => !zone.has(s))] : all;
+  // Soft reserve: for other passengers, free seats beside a student are assigned LAST (still buyable when chosen),
+  // so students who sit alone for now keep a free neighbour for longer.
+  const at = occupant(f), besideStudent = (s) => engine.adjacent(layout, s).some((nb) => at[nb] && at[nb] !== uid && f.pax[at[nb]].student);
+  // Automatic seats never take a seat planned for someone else (only a passenger who pays to choose can do that).
+  const freeSeats = all.filter((s) => !at[s] || at[s] === uid);
+  const order = p.student ? [...freeSeats.filter((s) => zone.has(s)), ...freeSeats.filter((s) => !zone.has(s))]
+    : [...freeSeats.filter((s) => !besideStudent(s)), ...freeSeats.filter((s) => besideStudent(s))];
   // A student who couldn't be placed in the zone (full, or under review) gets a valid seat elsewhere.
   return order.find((s) => !seatProblem(f, prefs, ext, layout, uid, s, { ignoreZone: p.student })) || null;
 }
@@ -482,6 +488,20 @@ async function passengerView(f, prefs, uid) {
   // student chose to share it. Lets a student hover a seat and see "Student · CUHK" or "Student".
   const studentSeats = {};
   if (p.student) for (const [o, x] of Object.entries(f.pax)) if (o !== uid && x.student && x.seat && seats[x.seat] !== 'out') studentSeats[x.seat] = x.share ? x.uni || '' : '';
+  // Detect and offer, never force: a student whose OWN chosen seat has no student beside it gets a free move offer
+  // to the best seat next to students (two neighbours first, same university first). Nothing moves without consent.
+  let moveOffer = null;
+  if (p.student && p.chosen && p.seat && p.status !== 'checked_in' && !(nearby && nearby.students)) {
+    let best = null;
+    for (const s of engine.seatsOf(layout)) {
+      if (s === p.seat || seatProblem(f, prefs, ext, layout, uid, s)) continue;
+      const nb = engine.adjacent(layout, s).map((x) => at[x]).filter((o) => o && o !== uid && f.pax[o].student);
+      if (!nb.length) continue;
+      const score = nb.length * 10 + (nb.some((o) => f.pax[o].share && p.uni && f.pax[o].uni === p.uni) ? 5 : 0);
+      if (!best || score > best.score) best = { seat: s, score, students: nb.length };
+    }
+    if (best) moveOffer = { seat: best.seat, row: parseInt(best.seat, 10), students: best.students };
+  }
   const t = now(), dep = depMs(f);
   const holdSeat = Object.keys(f.holds).find((s) => f.holds[s].uid === uid) || null;
   return {
@@ -491,7 +511,7 @@ async function passengerView(f, prefs, uid) {
     me: {
       cabin: p.cabin, fare: p.fare, selection: selection(p), status: p.status, seat: p.seat, seatKind: p.seatKind, chosen: Boolean(p.chosen), hold: holdSeat, rev: p.rev,
       wantsStudent: p.wantsStudent, student: p.student, alloc: p.alloc, notice: p.student && p.alloc && p.status !== 'checked_in' ? NOTICE[p.alloc](p) : '',
-      nearby, share: p.share,
+      nearby, share: p.share, moveOffer,
       checkin: t < dep - POLICY.checkinOpenHours * 3600e3 ? 'not_open' : t > dep - POLICY.checkinCloseMinutes * 60e3 ? 'closed' : 'open',
       preferencesOpen: p.student && t <= dep - POLICY.exclusionDeadlineHours * 3600e3,
     },

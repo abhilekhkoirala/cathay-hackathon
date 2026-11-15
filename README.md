@@ -227,6 +227,8 @@ There is **no reserved Student Zone** by default. Verified students who said yes
 
 - **A paying passenger can take any free seat**, including one only *planned* for a student. They can buy it in the app or through another sales channel.
 - **When that happens, the plan re-runs.** Students still sitting next to another student keep their seats. Anyone left alone is regrouped, borrowing one student from a group of 3 if needed, so **nobody sits alone** when the cabin allows it. Example: 6 students in 9A–9C and 14A–14C; someone buys 14A; the student from 14A is re-seated next to at least one student.
+- **Soft reserve:** when a paying passenger is seated automatically (check-in without choosing), free seats beside a student are used **last**, so a student who is alone for now keeps a free neighbour for longer. Anyone who **pays to choose** that seat can still buy it, so Cathay loses no revenue. Automatic seating also never takes a seat planned for a student.
+- **Detect and offer, never force:** if an Essential or Flex student's **own chosen seat** ends up with no student beside it (e.g. paying passengers bought both neighbours), the app offers a **free one-tap move** next to students ("A student is now seated in row 40, move to 40C?"). If they say no, they keep their seat. A chosen seat is never moved without consent.
 - **Never taken from a student:** a checked-in student's seat, a seat placed by operations, or a seat an Essential or Flex student chose themselves.
 - **Unchanged:** private exclusions, Economy Light rules, the review queue and the live updates work as before.
 
@@ -319,4 +321,17 @@ City photos on the Offers page (`images/cities/`, resized) are from Wikimedia Co
 | Bangkok | [Bangkok skytrain sunset](https://commons.wikimedia.org/wiki/File:Bangkok_skytrain_sunset.jpg) | Diliff | CC BY-SA 3.0 |
 | Sydney | [Sydney Opera House and Harbour Bridge Dusk (3)](https://commons.wikimedia.org/wiki/File:Sydney_Opera_House_and_Harbour_Bridge_Dusk_(3)_2019-06-21.jpg) | Benh LIEU SONG | CC BY-SA 4.0 |
 | London | [Tower Bridge London Dusk Feb 2006](https://commons.wikimedia.org/wiki/File:Tower_Bridge_London_Dusk_Feb_2006.jpg) | Diliff | CC BY-SA 3.0 |
+
+Food photos on the Dining offers page (`images/dining/`, resized), also from Wikimedia Commons:
+
+| Photo | Author | Licence |
+|---|---|---|
+| [Cup of coffee with latte art 2016](https://commons.wikimedia.org/wiki/File:Cup_of_coffee_with_latte_art_2016.jpg) | Abdulrohmatt | CC BY-SA 4.0 |
+| [Dim Sum Breakfast](https://commons.wikimedia.org/wiki/File:Dim_Sum_Breakfast.jpg) | afterdog | CC0 |
+| [Wonton noodle, Hong Kong](https://commons.wikimedia.org/wiki/File:Wonton_noodle-_Sai_Yung_Kee,_Hong_Kong.jpg) | cattan2011 | CC BY 2.0 |
+| [Hong Kong style pineapple bun and latte](https://commons.wikimedia.org/wiki/File:Hong_Kong_style_pineapple_bun_and_latte_-_Ikigai_Coffee_2024-07-01.jpg) | Andy Li | CC0 |
+| [Pearl Milk Tea](https://commons.wikimedia.org/wiki/File:Pearl_Milk_Tea_in_Chun_Shui_Tang.jpg) | Battlesnake1 | CC0 |
+| [Hong Kong Dan tat](https://commons.wikimedia.org/wiki/File:Hong_Kong_Dan_tat.jpg) | stu_spivack | CC BY-SA 2.0 |
+
+The dining offers themselves are **examples (concept)**: no partner restaurants have been signed.
 

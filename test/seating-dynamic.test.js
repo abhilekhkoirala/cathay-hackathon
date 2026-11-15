@@ -132,3 +132,43 @@ test('engine (dynamic): a student left alone by a sale is regrouped; zone mode k
   const zone = engine.allocate({ layout, zoneSeats: usable, students, pairs: [] });
   assert.equal(zone.seatOf.s5, '45B'); // without regroupAlone the unaffected student keeps their seat
 });
+
+test('edge case: a Flex student\'s own seat gets surrounded by paying passengers -> free move offer, never forced', async () => {
+  const F = flight();
+  const flex = await person('Rio');
+  await book(flex, F, { fare: 'Flex' });
+  assert.equal((await call('POST', `/api/seating/flights/${F.fid}/select`, { seat: '50E' }, flex.token)).status, 200); // middle seat D-E-G
+  // Two paying passengers pick both neighbours: the student's chosen seat is fixed and nobody else is a student yet.
+  const a = await person('Uma', { student: false }), b = await person('Vic', { student: false });
+  await book(a, F, { studentSeating: false }); await book(b, F, { studentSeating: false });
+  assert.equal((await call('POST', `/api/seating/flights/${F.fid}/select`, { seat: '50D' }, a.token)).status, 200);
+  assert.equal((await call('POST', `/api/seating/flights/${F.fid}/select`, { seat: '50G' }, b.token)).status, 200);
+  assert.equal(seatOf(F, flex), '50E');                                      // never moved without consent
+  let v = (await call('GET', `/api/seating/flights/${F.fid}/seatmap`, undefined, flex.token)).view;
+  assert.equal(v.me.moveOffer, null);                                        // no other student on board yet: nothing to offer
+  // Two other students book and are seated together automatically -> the offer appears.
+  for (const name of ['Wen', 'Xia']) { const s = await person(name); await book(s, F); }
+  v = (await call('GET', `/api/seating/flights/${F.fid}/seatmap`, undefined, flex.token)).view;
+  assert.ok(v.me.moveOffer && v.me.moveOffer.students >= 1, 'move offer next to students');
+  assert.equal(seatOf(F, flex), '50E');                                      // still not moved
+  // One tap: the student accepts and now sits next to a student.
+  assert.equal((await call('POST', `/api/seating/flights/${F.fid}/select`, { seat: v.me.moveOffer.seat }, flex.token)).status, 200);
+  v = (await call('GET', `/api/seating/flights/${F.fid}/seatmap`, undefined, flex.token)).view;
+  assert.ok(v.me.nearby.students >= 1);
+  assert.equal(v.me.moveOffer, null);
+});
+
+test('soft reserve: automatic seats for other passengers avoid the free seats beside students', async () => {
+  const F = flight(40);
+  const s = await person('Yan'); await book(s, F); // a lone student gets a planned seat
+  // Non-students checking in without choosing get seats, never the free neighbours of the student while others exist.
+  for (const name of ['Zed', 'Amy', 'Bob']) {
+    const p = await person(name, { student: false });
+    await book(p, F, { studentSeating: false, fare: 'Light' });
+    const ci = await call('POST', `/api/seating/flights/${F.fid}/checkin`, {}, p.token); // 40 h flight: check-in is open
+    assert.equal(ci.status, 200, ci.error);
+    const studentSeat = seatOf(F, s);
+    assert.notEqual(seatOf(F, p), studentSeat, `${name} got the student's planned seat`);
+    assert.ok(!engine.adjacent(WIDE, studentSeat).includes(seatOf(F, p)), `${name} was assigned a seat beside the lone student`);
+  }
+});

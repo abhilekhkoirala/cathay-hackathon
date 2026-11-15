@@ -8,6 +8,8 @@ There is **no reserved Student Zone** by default. Verified students who said yes
 
 - **A paying passenger can take any free seat**, including one only *planned* for a student. They can buy it in the app or through another sales channel.
 - **When that happens, the plan re-runs.** Students still sitting next to another student keep their seats. Anyone left alone is regrouped, borrowing one student from a group of 3 if needed, so **nobody sits alone** when the cabin allows it. Example: 6 students in 9A–9C and 14A–14C; someone buys 14A; the student from 14A is re-seated next to at least one student.
+- **Soft reserve:** when a paying passenger is seated automatically (check-in without choosing), free seats beside a student are used **last**, so a student who is alone for now keeps a free neighbour for longer. Anyone who **pays to choose** that seat can still buy it, so Cathay loses no revenue. Automatic seating also never takes a seat planned for a student.
+- **Detect and offer, never force:** if an Essential or Flex student's **own chosen seat** ends up with no student beside it (e.g. paying passengers bought both neighbours), the app offers a **free one-tap move** next to students ("A student is now seated in row 40, move to 40C?"). If they say no, they keep their seat. A chosen seat is never moved without consent.
 - **Never taken from a student:** a checked-in student's seat, a seat placed by operations, or a seat an Essential or Flex student chose themselves.
 - **Unchanged:** private exclusions, Economy Light rules, the review queue and the live updates work as before.
 

@@ -369,7 +369,7 @@
     SEAT.views[v.fid] = v;
     if (old && JSON.stringify(old) !== JSON.stringify(v)) {
       liveRerender();
-      if (old.me.seat !== v.me.seat && v.me.seat && route()[0] !== 'seats') flashTick(`Your seat is now ${v.me.seat}`);
+      if (old.me.seat !== v.me.seat && v.me.seat && !seatSecret(v.me) && route()[0] !== 'seats') flashTick(`Your seat is now ${v.me.seat}`);
     }
   }
   async function seatCall(method, fid, path, body) {
@@ -437,6 +437,18 @@
     return '';
   }
 
+  /* "Move next to students?" offer, when the student's own chosen seat ended up with no student beside it. */
+  // One "No thanks" hides move offers for that whole flight, even if a better seat opens later.
+  const moveDismissed = (fid) => Boolean((store.get('moveDismiss', {}) || {})[fid]);
+  function moveOfferCard(fid, me) {
+    const o = me && me.moveOffer;
+    if (!o || moveDismissed(fid, o.seat)) return '';
+    return `<div class="move-offer" role="status">${icon('seat')}<div><b>${o.students > 1 ? 'Two students are' : 'A student is'} now seated in row ${o.row}</b>
+      <span>Move to seat ${esc(o.seat)}, next to them? It's free, and you keep your seat if you say no.</span>
+      <div class="row gap-sm"><button class="btn btn-primary sm-btn" data-action="move-accept" data-fid="${esc(fid)}" data-seat="${esc(o.seat)}">Move (free)</button>
+      <button class="btn btn-ghost sm-btn" data-action="move-decline" data-fid="${esc(fid)}" data-seat="${esc(o.seat)}">No thanks</button></div></div></div>`;
+  }
+
   function studentCard(t) {
     if (!user || t.cabin !== 'Economy' || !isUpcoming(t)) return '';
     if (!studentEligible(t)) return studentGate(t.segments[0].dep); // the seating planner is a student feature
@@ -446,7 +458,8 @@
       const v = seatView(s);
       if (!v || !v.me.student) return '';
       const nb = v.me.nearby && v.me.nearby.students ? `, next to ${nearbyText(v.me.nearby)}` : '';
-      return `<p class="sm" style="margin:0">${esc(s.number)} · ${v.me.seat && v.me.alloc === 'assigned' ? `Student seat <b>${esc(v.me.seat)}</b>${nb}` : esc(v.me.notice)}</p>`;
+      if (seatSecret(v.me)) return `<p class="sm" style="margin:0">${esc(s.number)} · Student seating: your seat${v.me.seat ? ', next to students,' : ''} is given to you at check-in</p>`;
+      return `<p class="sm" style="margin:0">${esc(s.number)} · ${v.me.seat && (v.me.alloc === 'assigned' || v.me.chosen) ? `Student seat <b>${esc(v.me.seat)}</b>${nb}` : esc(v.me.notice)}</p>${moveOfferCard(v.fid, v.me)}`;
     }).join('') : '';
     const seated = zoneLines;
     return `
@@ -479,7 +492,7 @@
   function seatChoice(yes, ref) {
     const change = ref ? `data-action="seat-change" data-ref="${ref}"` : 'data-action="seat-change-form"';
     const t = ref && findTrip(ref);
-    const share = !yes ? '' : `<label class="check sm share-row"><input type="checkbox" ${ref ? `class="share-uni" data-ref="${ref}"` : 'name="szShowUni"'} ${t && t.showUni ? 'checked' : ''}> Show my university to students seated near me <span class="muted">(never your name)</span></label>`;
+    const share = !yes ? '' : `<label class="check sm share-row"><input type="checkbox" ${ref ? `class="share-uni" data-ref="${ref}"` : 'name="szShowUni"'} ${t && t.showUni ? 'checked' : ''}> Show my university to students seated near me</label>`;
     return `<div class="sz-choice ${yes ? 'yes' : 'no'}">
       <span>${yes ? 'Student seating selected · we seat you next to students, free on every fare' : 'Standard seating selected'}</span>
       <button type="button" class="link-btn" ${change}>Change</button></div>${share}${ref ? '' : `<input type="hidden" name="szSeat" value="${yes ? 'yes' : 'no'}">`}`;
@@ -532,7 +545,7 @@
     return '';
   }
   const tripRewards = (t) => (user && user.verified ? (perks().redeemed || []).filter((r) => r.ref === t.ref) : []);
-  const rewardName = (id) => (REWARDS.find((r) => r.id === id) || { name: id === 'seat' ? 'Preferred seat' : 'Reward' }).name; // older redemptions may refer to removed rewards
+  const rewardName = (id) => (id === 'bag' ? 'Bag delivery' : (REWARDS.find((r) => r.id === id) || { name: id === 'seat' ? 'Preferred seat' : 'Reward' }).name); // older redemptions may refer to removed rewards
   const perks = () => store.get('perks', null) || {};
   const savePerks = (p) => store.set('perks', p);
   const plugNeeded = (s) => Boolean(SZ.plugFor(s.to)) && SZ.plugFor(s.to) !== SZ.plugFor(s.from);
@@ -541,6 +554,87 @@
   /* The free adapter is a welcome gift: once per study programme (per verified university email),
    * on the first trip to the university's country where the plugs differ from home. */
   const adapterClaimed = (p = perks()) => Boolean(p.adapter && p.adapter.email === user.verified.email);
+  /* Bag delivery (airport -> your door, same evening, up to 2 bags): 5,000 student points, no free use
+   * (a free first delivery could be taken once by someone who never flies Cathay again). Booked at least 24 h before landing.
+   * 5,000 pts: a point is worth ~US$0.0084 to the student, so 5,000 < the ~US$42 retail price (tempting), and it covers
+   * a partner price up to 5,000 x US$0.0036 = US$18 (no loss for Cathay). Stored as a 'bag' entry in p.redeemed. */
+  // Student price by card: $25 instead of the usual ~$42 (HK$327 retail), still above the ~US$18 partner target, so
+  // Cathay doesn't lose and students have a reason not to carry their bags themselves. 5,000 pts also cover ~US$18.
+  const BAG_PTS = 5000, BAG_CASH = 25, BAG_RETAIL = 42;
+  const bagCashFor = (pts) => Math.round(((BAG_PTS - pts) / BAG_PTS) * BAG_CASH * 100) / 100; // 1,000 pts = $5 off
+  /* Pay with student points, card, or a mix (all the points you have, rest by card). */
+  function bagPay(t, p) {
+    const have = Math.min(BAG_PTS, Math.floor(Math.max(0, spLeft(p)) / 100) * 100);
+    const tiles = [
+      have >= BAG_PTS && ['pts', `${BAG_PTS.toLocaleString()} pts`, 'Student points'],
+      have > 0 && have < BAG_PTS && ['mix', `${have.toLocaleString()} pts + $${bagCashFor(have).toFixed(2)}`, 'Points + card'],
+      ['cash', `$${BAG_CASH}`, `By card · student price <s>$${BAG_RETAIL}</s>`],
+    ].filter(Boolean);
+    return `<div class="bag-pay" role="radiogroup" aria-label="How to pay">${tiles.map(([v, big, small], k) => `
+      <label class="bag-tile"><input type="radio" name="bagpay" value="${v}" ${k === 0 ? 'checked' : ''}><b>${big}</b><span>${small}</span></label>`).join('')}
+      <button class="btn btn-primary block" data-action="bag-book" data-ref="${t.ref}">Book delivery</button></div>`;
+  }
+  /* The offer: a pop-up with the 3 steps and the payment choice. */
+  function bagModal(ref) {
+    const t = findTrip(ref), p = perks();
+    if (!t || !bagOpen(t) || bagBookings(p).some((r) => r.ref === ref)) return;
+    const to = esc(city(t.segments[0].to));
+    document.querySelector('.modal-bg')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" data-action="modal-close">
+        <div class="modal promo bag-modal" data-action="noop" role="dialog" aria-modal="true" aria-labelledby="bagTitle">
+          <div class="promo-hero"><span class="promo-badge">${icon('bag')} Student bag delivery</span>
+            <h2 id="bagTitle">Land light in ${to}</h2>
+            <p>Two suitcases and a new city? Leave the heavy part to us. Walk out of arrivals hands-free and find your bags at your door the same evening.</p></div>
+          <ol class="bag-steps">
+            <li><span>${icon('plane')}</span><b>Land</b><small>${to}, ${fmtDate(t.segments[0].arr, { day: 'numeric', month: 'short' })}</small></li>
+            <li><span>${icon('bag')}</span><b>Drop</b><small>at the arrivals desk, up to 2 bags</small></li>
+            <li><span>${icon('home')}</span><b>Relax</b><small>bags at your door tonight</small></li>
+          </ol>
+          ${bagPay(t, p)}
+          <button class="link-btn block-link" data-action="modal-close">Not now</button>
+        </div>
+      </div>`);
+  }
+  const bagBookings = (p = perks()) => (p.redeemed || []).filter((r) => r.id === 'bag');
+  const bagOpen = (t) => new Date(t.segments[0].arr).getTime() - Date.now() >= 24 * 3600e3;
+  /* Trip page: the booked delivery, or a one-tap offer while it can still be booked. Verified students only. */
+  function tripBagCard(t, up) {
+    if (!user || !user.verified || !isStudent()) return '';
+    const p = perks(), r = bagBookings(p).find((x) => x.ref === t.ref), to = esc(city(t.segments[0].to));
+    if (r) return `<div class="bag-block booked">
+      <div class="bag-block-ico">${icon('check')}</div>
+      <div><p class="bag-kicker">Bag delivery booked</p><h3>Your bags go straight to your door</h3>
+        <p>Land in ${to}, drop up to 2 bags at the arrivals desk and head out hands-free. They arrive the same evening.</p>
+        <span class="bag-paid">Paid ${[r.pts ? r.pts.toLocaleString() + ' student points' : '', r.cash ? '$' + r.cash.toFixed(2) : ''].filter(Boolean).join(' + ')}</span></div></div>`;
+    if (!up || !bagOpen(t)) return '';
+    // First visit after booking: suggest it with the pop-up, once per trip.
+    const asked = store.get('bagAsked', {}) || {};
+    if (!t.pendingPay && !asked[t.ref]) { asked[t.ref] = 1; store.set('bagAsked', asked); setTimeout(() => { if (!document.querySelector('.modal-bg')) bagModal(t.ref); }, 500); }
+    return `<div class="bag-block">
+      <div class="bag-block-ico">${icon('bag')}</div>
+      <div><p class="bag-kicker">Student bag delivery</p><h3>Land light in ${to}</h3>
+        <p>Walk out of arrivals hands-free: your bags reach your door the same evening. From ${BAG_PTS.toLocaleString()} student points.</p></div>
+      <button class="btn bag-cta" data-action="bag-offer" data-ref="${t.ref}">Add delivery</button></div>`;
+  }
+
+  function bagCard(p) {
+    const done = bagBookings(p);
+    const trips = upcoming().filter((t) => bagOpen(t) && !done.some((r) => r.ref === t.ref));
+    const row = (t, right) => `<div class="perk-row"><div><b>${esc(city(t.segments[0].from))} → ${esc(city(t.segments[0].to))}</b><div class="muted sm">Lands ${fmtDate(t.segments[0].arr, { day: 'numeric', month: 'short' })} · bags at your door that evening</div></div>${right}</div>`;
+    return `<div class="card perk bag-perk">
+      <div class="perk-head">${icon('bag')}<div><h3>Land light: bags delivered to your door</h3>
+        <p class="muted sm">Two suitcases, a backpack and a brand-new city? Drop your bags at the arrivals desk, take the train with nothing but your phone, and find everything waiting at your dorm the same evening. Your first night in a new city should be about the city, not the luggage.</p></div></div>
+      <ul class="perk-list">
+        <li>${icon('tag')} <b>${BAG_PTS.toLocaleString()} student points per delivery</b>: up to 2 bags, perfect for moving-in day</li>
+        <li>${icon('gift')} Or pay the student price of $${BAG_CASH} by card (usually $${BAG_RETAIL}), or mix points and card</li>
+        <li>${icon('check')} Book at least 24 hours before you land; we hand your bags to our delivery partner at arrivals</li>
+      </ul>
+      ${trips.map((t) => row(t, `<button class="btn btn-primary sm-btn" data-action="bag-offer" data-ref="${t.ref}">Add delivery</button>`)).join('')}
+      ${done.map((r) => { const t = findTrip(r.ref); return t ? row(t, `<span class="badge ok">Booked · ${[r.pts ? r.pts.toLocaleString() + ' pts' : '', r.cash ? '$' + r.cash.toFixed(2) : ''].filter(Boolean).join(' + ')}</span>`) : ''; }).join('')}
+      ${!trips.length && !done.length ? '<p class="muted sm">Book a flight and you can add bag delivery here.</p>' : ''}
+    </div>`;
+  }
   function adapterTrip(p = perks()) {
     if (adapterClaimed(p)) return findTrip(p.adapter.ref) || null;
     return upcoming().find((t) => { const s = t.segments[0]; return (airport(s.to) || {}).country === studyCountry() && plugNeeded(s); }) || null;
@@ -696,7 +790,7 @@
     const s = next.segments[0], n = daysUntil(s.dep), view = `#/trip/${next.ref}`;
     return `<div class="nf-label m-only"><span class="lab">Next flight</span>${link(view, 'View booking')}</div>
     <section class="card nf">
-      <div class="nf-top"><span class="lab d-only">Next flight</span><span class="pillc">Confirmed</span></div>
+      <div class="nf-top"><span class="lab d-only">Next flight</span><span class="pillc">${next.pendingPay ? 'Payment pending' : 'Confirmed'}</span></div>
       <div class="nf-date">${dayMon(s.dep)}</div>
       <div class="nf-route"><div><b>${s.from}</b><span class="d-only">${esc(city(s.from))}</span></div>${icon('arrow')}<div><b>${s.to}</b><span class="d-only">${esc(city(s.to))}</span></div></div>
       <p class="nf-cities m-only">${esc(city(s.from))} · ${esc(city(s.to))}</p>
@@ -1064,7 +1158,34 @@
     { id: 'city', title: 'CITY GUIDE', text: 'Neighbourhoods, transport, essentials and hidden gems.', tone: 'green',
       more: 'Getting settled in a new city: where students live, how to get around, essentials for your first week, and hidden gems recommended by other students.' },
   ];
+  /* Dining offers (concept): example student deals, no partner restaurants signed yet. Photos: Wikimedia Commons. */
+  const DINING = [
+    ['coffee.jpg', 'Campus cafés', '15% off coffee and pastries', 'All day near campus, with your verified student pass.', 'Abdulrohmatt', 'CC BY-SA 4.0'],
+    ['dimsum.jpg', 'Dim sum', 'Free tea for student tables', 'Weekday lunch, for tables of 2 or more students.', 'afterdog', 'CC0'],
+    ['noodles.jpg', 'Noodle bars', 'Student lunch set', 'A fixed student price on weekdays, 11:30–14:30.', 'cattan2011', 'CC BY 2.0'],
+    ['chachaanteng.jpg', 'Cha chaan teng', 'Free drink upgrade', 'With any breakfast set before 11:00.', 'Andy Li', 'CC0'],
+    ['bubbletea.jpg', 'Bubble tea', '2 for 1 on Tuesdays', 'Bring a friend from your course.', 'Battlesnake1', 'CC0'],
+    ['eggtart.jpg', 'Bakeries', '10% off after 6 pm', 'Fresh egg tarts for late study sessions.', 'stu_spivack', 'CC BY-SA 2.0'],
+  ];
+  function diningPage() {
+    return `<div class="narrow wide">${backLink('#/community', 'Student life')}
+      <p class="eyebrow">Travel community</p><h1>Dining offers</h1>
+      <p class="cm-sub">Student-only savings at selected cafés and restaurants.</p>
+      <span class="concept-chip">${icon('info')} Example offers · concept, partner restaurants not signed yet</span>
+      <div class="dn-steps">
+        <div>${icon('cap')}<b>Show your pass</b><span>Your verified student pass in the app</span></div>
+        <div>${icon('tag')}<b>Get the student price</b><span>Applied at the counter or when you order</span></div>
+        <div>${icon('up')}<b>Earn student points</b><span>Every visit adds to your points</span></div>
+      </div>
+      ${user && !isStudent() ? `<a class="banner student-banner" href="#/verify">${icon('cap')}<span><b>Verify your student status</b><br><span class="muted sm">Student dining offers need a verified student account.</span></span>${icon('arrow')}</a>` : ''}
+      <div class="dn-grid">${DINING.map(([img, tag, deal, note, by, lic]) => `<article class="dn-card">
+        <div class="dn-photo" style="background-image:url(images/dining/${img})"><span class="dn-tag">${esc(tag)}</span></div>
+        <div class="dn-body"><b>${esc(deal)}</b><p>${esc(note)}</p></div>
+        <small class="dn-credit">Photo: ${esc(by)} · ${esc(lic)} · Wikimedia Commons</small></article>`).join('')}</div>
+    </div>`;
+  }
   views.community = (sub) => {
+    if (sub === 'dining') return diningPage();
     const c = COMMUNITY.find((x) => x.id === sub && x.more);
     if (c) {
       return `<div class="narrow">${backLink('#/community', 'Student life')}
@@ -1242,7 +1363,9 @@
     return `
     <div class="narrow">
       ${backLink(user ? '#/trips' : '#/retrieve', 'Back')}
-      <div class="row between"><h1>${tripLabel(t)}</h1>${badge(t.status)}</div>
+      <div class="row between"><h1>${tripLabel(t)}</h1>${t.pendingPay ? badge('Payment pending') : badge(t.status)}</div>
+      ${t.pendingPay ? `<div class="card pay-bar"><div><p class="eyebrow">Booking not finished</p><b>Payment pending</b><span class="muted sm">Choose your seat and pay to confirm this booking.</span></div>
+        <a class="btn btn-primary sm-btn" href="#/${studentTrip(t) ? 'planner' : 'seats'}/${t.ref}/0">Finish booking</a></div>` : ''}
       <p class="muted">Booking reference <b class="mono">${t.ref}</b> · ${t.pax.map((p) => esc(p.first + ' ' + p.last)).join(', ')}</p>
       ${t.segments.map((s, i) => segmentCard(s, t, i)).join('')}
       <div class="card">
@@ -1250,6 +1373,7 @@
         <div class="sum-row"><span>Baggage</span><b>${t.cabin === 'Economy' ? '1 × 23 kg' : t.cabin === 'Premium Economy' ? '2 × 23 kg' : '2 × 32 kg'}</b></div>
       </div>
       ${studentCard(t)}
+      ${tripBagCard(t, up)}
       ${up ? `<div class="stack">
         ${t.checkedIn
           ? t.segments.map((s, i) => `<a class="btn btn-primary block" href="#/boarding/${t.ref}/${i}">Boarding pass · ${s.from} → ${s.to}</a>`).join('')
@@ -1284,7 +1408,7 @@
         </div>
         ${me ? `<div class="pass-zone">${icon('cap')} Student seating${nb && nb.students ? ' · next to ' + nearbyText(nb) : ''}</div>` : ''}
         ${t.parentPass ? `<div class="pass-zone">${icon('heart')} Companion Pass · +${PERKS.parentBags} checked bag (23 kg)</div>` : ''}
-        ${tripRewards(t).map((r) => `<div class="pass-zone">${icon((REWARDS.find((x) => x.id === r.id) || { icon: 'seat' }).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
+        ${tripRewards(t).map((r) => `<div class="pass-zone">${icon(r.id === 'bag' ? 'bag' : (REWARDS.find((x) => x.id === r.id) || { icon: 'seat' }).icon)} ${esc(rewardName(r.id))} · student points</div>`).join('')}
         ${Number(idx) === 0 && user && user.verified && adapterClaimed() && perks().adapter.ref === t.ref ? `<div class="pass-zone">${icon('plug')} Travel adapter Type ${esc(SZ.plugFor(s.to))} · collect it from the crew on board</div>` : ''}
         <div class="pass-cut"></div>
         <div class="qr">${barcode(seed)}</div>
@@ -1303,13 +1427,18 @@
   }
 
   /* Booking step 3 (fares that include seat selection): choose the seat, then confirm and pay. */
-  function payBar(ref) {
+  // Next flight of the booking (after flight i) whose fare includes seat selection, or -1.
+  const nextSeatStep = (t, i) => t.segments.findIndex((s, j) => j > i && seatRule(t.cabin, s.fare || t.fare) === 'free');
+  function payBar(ref, idx) {
     const t = findTrip(ref);
     if (!t || !t.pendingPay) return '';
+    const i = Number(idx) || 0, nx = nextSeatStep(t, i), seg = t.segments[i];
     return `<div class="card pay-bar">
-      <div><p class="eyebrow">Booking · last step</p><b>Choose your seat, included in your fare</b><span class="muted sm">${studentTrip(t) ? 'We already placed you next to students; pick another seat if you prefer.' : 'Tap a seat on the map, or skip and get one for free at check-in.'}</span></div>
+      <div><p class="eyebrow">Booking · ${nx >= 0 ? `seat for flight ${i + 1} of ${t.segments.length}` : 'last step'}</p><b>Choose your seat${seg ? ` for ${esc(seg.from)} → ${esc(seg.to)}` : ''}, included in your fare</b><span class="muted sm">${studentTrip(t) ? 'We already placed you next to students; pick another seat if you prefer.' : 'Tap a seat on the map, or skip and get one for free at check-in.'}</span></div>
       <div class="row gap-sm"><button class="btn btn-ghost sm-btn" data-action="finish-pay" data-ref="${t.ref}" data-skip="1">Skip for now</button>
-      <button class="btn btn-primary sm-btn" data-action="finish-pay" data-ref="${t.ref}">Confirm and pay · ${money(t.total)}</button></div>
+      ${nx >= 0
+        ? `<button class="btn btn-primary sm-btn" data-action="finish-pay" data-ref="${t.ref}" data-next="${nx}">Next: seat for ${esc(t.segments[nx].from)} → ${esc(t.segments[nx].to)}</button>`
+        : `<button class="btn btn-primary sm-btn" data-action="finish-pay" data-ref="${t.ref}">Confirm and pay · ${money(t.total)}</button>`}</div>
     </div>`;
   }
 
@@ -1332,8 +1461,12 @@
   };
   const legend = (items) => `<div class="seat-legend">${items.map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`).join('')}</div>`;
   /* One seat from the server's view. 'x' covers taken, blocked AND restricted seats on purpose: nobody can tell why. */
+  /* A student who can't choose a seat (Economy Light) gets it at check-in: the planner works in the background
+   * and the seat number stays hidden until then. Fares that include seat selection see (and can change) it. */
+  const seatSecret = (me) => Boolean(me && me.student && me.selection === 'none' && me.status !== 'checked_in');
   function viewCell(v, id, selectable, readOnly) {
-    const st = v.seats[id] || 'x';
+    let st = v.seats[id] || 'x';
+    if (st === 'mine' && readOnly && seatSecret(v.me)) st = 'x';
     if (st === 'out') return seatEl(id, 'out', '', '', ', outside the Student Zone');
     if (st === 'mine') return seatEl(id, 'mine', id.slice(-1), '', ', your seat');
     if (st === 'held') return seatEl(id, 'mine held', id.slice(-1), '', ', selected, not confirmed yet');
@@ -1426,7 +1559,8 @@
     const me = v.me;
     if (!me.student) return `<div class="narrow">${head}${studentGate(s.dep) || '<div class="card empty">You have no student seating on this flight.</div>'}</div>`;
     const z = v.zone, canPick = me.selection !== 'none' && me.status !== 'checked_in' && me.checkin !== 'closed';
-    const status = me.status === 'checked_in' ? `Checked in · seat <b>${esc(me.seat)}</b>` : me.alloc === 'assigned' ? `Allocated seat <b>${esc(me.seat)}</b> · confirmed at check-in` : esc(me.notice);
+    const secret = seatSecret(me);
+    const status = me.status === 'checked_in' ? `Checked in · seat <b>${esc(me.seat)}</b>` : secret ? 'We seat you next to other students automatically. Your seat number is given to you at check-in.' : me.alloc === 'assigned' ? `Allocated seat <b>${esc(me.seat)}</b> · confirmed at check-in` : esc(me.notice);
     return `
     <div class="narrow wide">${head}
       <div class="seat-layout">
@@ -1434,13 +1568,14 @@
           ${seatGrid(v.layout, (id) => viewCell(v, id, canPick && v.seats[id] === 'free', true), z.rows)}</div>
         <div class="seat-side">
           <div class="card sz-card"><p class="eyebrow">Your allocation</p>
-            ${me.seat ? `<div class="seat-big">${esc(me.seat)}</div>` : ''}
+            ${me.seat && !secret ? `<div class="seat-big">${esc(me.seat)}</div>` : ''}
             <p class="sm" style="margin:0">${status}</p>
-            ${me.nearby && me.nearby.students ? `<p class="sm" style="margin:6px 0 0">Next to ${nearbyText(me.nearby)}</p>` : ''}
-            ${me.nearby && me.nearby.sameUni ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}
+            ${!secret && me.nearby && me.nearby.students ? `<p class="sm" style="margin:6px 0 0">Next to ${nearbyText(me.nearby)}</p>` : ''}
+            ${!secret && me.nearby && me.nearby.sameUni ? `<p class="sz-same sm">${icon('check')} Same university as you</p>` : ''}
+            ${moveOfferCard(v.fid, me)}
             ${canPick ? `<div class="alloc-pick"><b>${icon('seat')} Choose your own seat</b>
               <span class="muted">Seat selection is included in Economy ${esc(me.fare || '')}: tap an available seat. ${me.chosen ? `You chose <b>${esc(me.seat)}</b>. <button type="button" class="link-btn" data-action="seat-drop">Go back to automatic seating</button>` : 'Or keep the seat we allocated, next to other students.'}</span></div>`
-              : me.status !== 'checked_in' && me.fare === 'Light' ? '<p class="muted xs">Your student seat is assigned for free. Choosing a specific seat isn\'t included in Economy Light.</p>' : ''}
+              : me.status !== 'checked_in' && me.fare === 'Light' ? '<p class="muted xs">Your seat next to students is free and given to you at check-in. Choosing a specific seat isn\'t included in Economy Light.</p>' : ''}
           </div>
           <div class="card prefs" id="prefsCard">
             <h3>${icon('shield')} Private seating preferences</h3>
@@ -1920,6 +2055,8 @@
         <div class="perk-head">${icon('plug')}<div><h3>Free travel adapter</h3><p class="muted sm">${country ? `New to ${esc(countryName(country))}? Get a free Type ${esc(plug)} adapter on your first flight there, handed to you on board by the crew.` : 'A free adapter for your university\'s country, handed to you on board.'} Once per study programme.</p></div></div>
         ${adapter}
       </div>
+
+      ${bagCard(p)}
     </div>`;
   };
 
@@ -1943,8 +2080,8 @@
   /* ---------- flight chat: see the student flight chat section (chat-server.js) ---------- */
   /* The seat pages show the booking's last step on top while a booking is waiting for payment. */
   { const seatsPage = views.seats, plannerPage = views.planner;
-    views.seats = (ref, idx) => payBar(ref) + seatsPage(ref, idx);
-    views.planner = (ref, idx) => payBar(ref) + plannerPage(ref, idx); }
+    views.seats = (ref, idx) => payBar(ref, idx) + seatsPage(ref, idx);
+    views.planner = (ref, idx) => payBar(ref, idx) + plannerPage(ref, idx); }
 
   /* ---------- student flight chat (chat-server.js enforces every rule server-side) ---------- */
   let chatConn = null;
@@ -2401,6 +2538,14 @@
       if (!r.ok) { toast(r.error || 'That seat is not available.'); await seatCall('GET', v.fid, '/seatmap'); return; }
       flashTick(`Seat ${el.dataset.seat} is yours`); void t; void i;
     },
+    async 'move-accept'(el) {
+      const r = await seatCall('POST', el.dataset.fid, '/select', { seat: el.dataset.seat });
+      if (r.ok) flashTick('Moved to seat ' + el.dataset.seat + ', next to students'); else toast(r.error || 'That seat was just taken. Try again.');
+    },
+    'move-decline'(el) {
+      const d = store.get('moveDismiss', {}) || {}; d[el.dataset.fid] = el.dataset.seat; store.set('moveDismiss', d);
+      flashTick('Okay, you keep your seat'); rerender();
+    },
     async 'seat-drop'() {
       const { v } = seatCtx || {};
       if (!v) return;
@@ -2453,7 +2598,10 @@
     signout() { signOutLocal('Signed out.'); },
     'reset-demo'() {
       if (!confirm('Clear all your bookings and perks? Your account and student verification stay.')) return;
-      store.set('trips', []); store.set('perks', {}); store.set('sales', {}); store.set('seatplans', {});
+      // Keep the once-only items (welcome bonus, adapter) and the points already spent, so clearing can't re-grant them.
+      const old = perks(), keep = {};
+      ['welcome', 'welcomeAt', 'adapter', 'redeemed', 'seatBuys', 'graduated'].forEach((k) => { if (old[k] !== undefined) keep[k] = old[k]; });
+      store.set('trips', []); store.set('perks', keep); store.set('sales', {}); store.set('seatplans', {});
       loadState(); toast('Bookings and perks cleared.'); location.hash = '#/home'; render();
     },
     async unverify() {
@@ -2480,6 +2628,23 @@
     },
     'verify-resend'() { startVerify(vs.email, true); },
     'verify-change'() { vs.step = 'email'; vs.msg = ''; render(); },
+    'bag-offer'(el) { bagModal(el.dataset.ref); },
+    'bag-book'(el) {
+      const p = perks(), t = findTrip(el.dataset.ref);
+      if (!t || !bagOpen(t)) return toast('Bag delivery must be booked at least 24 hours before you land.');
+      if (bagBookings(p).some((r) => r.ref === t.ref)) return toast('Bag delivery is already booked for this trip.');
+      const how = ((el.closest('.bag-pay') || document).querySelector('input[name="bagpay"]:checked') || {}).value || 'cash';
+      const have = Math.min(BAG_PTS, Math.floor(Math.max(0, spLeft(p)) / 100) * 100);
+      const pts = how === 'pts' ? BAG_PTS : how === 'mix' ? have : 0;
+      if (how === 'pts' && have < BAG_PTS) return toast('Not enough student points.');
+      const cash = bagCashFor(pts);
+      p.redeemed = [...(p.redeemed || []), { id: 'bag', ref: t.ref, pts, cash, at: toISO(new Date()) }];
+      savePerks(p);
+      if (cash) { t.total = Math.round((t.total + cash) * 100) / 100; saveTrips(); }
+      document.querySelector('.modal-bg')?.remove();
+      rerender();
+      flashTick(`Bag delivery booked · ${[pts ? pts.toLocaleString() + ' pts' : '', cash ? '$' + cash.toFixed(2) : ''].filter(Boolean).join(' + ')}`);
+    },
     'claim-adapter'(el) {
       const p = perks(), t = findTrip(el.dataset.ref);
       p.adapter = { email: user.verified.email, ref: t.ref, at: toISO(new Date()) };
@@ -2489,6 +2654,7 @@
     'finish-pay'(el) {
       const t = findTrip(el.dataset.ref);
       if (!t) return;
+      if (el.dataset.next) { location.hash = `#/${studentTrip(t) ? 'planner' : 'seats'}/${t.ref}/${el.dataset.next}`; return; }
       delete t.pendingPay; saveTrips();
       toast(`Booked! Reference ${t.ref}${el.dataset.skip ? ' · seat at check-in' : ''}`);
       location.hash = '#/trip/' + t.ref;

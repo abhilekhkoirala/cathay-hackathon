@@ -22,7 +22,9 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 FILES=(package.json package-lock.json *.js *.html *.css seating images)
 envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 # Server settings copied from your local .env (only these keys; never SMTP or AWS secrets).
-SERVER_ENV="$(for k in OAG_KEY MODERATORS VERIFIERS DOC_ENCRYPTION_KEY STUDENT_POLICY_VERSION STUDENT_AUTO_APPROVE SEAT_OPS ZONE_ROWS_WIDE ZONE_ROWS_NARROW ZONE_RELEASE_HOURS; do printf '%s=%s\n' "$k" "$(envval $k)"; done)"
+# STUDENT_AUTO_APPROVE is NOT copied: the public server reviews student IDs (default off). To change it for the cloud only:
+#   STUDENT_AUTO_APPROVE_CLOUD=pdf-text bash aws/seat-server.sh
+SERVER_ENV="$(for k in OAG_KEY MODERATORS VERIFIERS DOC_ENCRYPTION_KEY STUDENT_POLICY_VERSION SEAT_OPS ZONE_ROWS_WIDE ZONE_ROWS_NARROW ZONE_RELEASE_HOURS; do printf '%s=%s\n' "$k" "$(envval $k)"; done; printf 'STUDENT_AUTO_APPROVE=%s\n' "${STUDENT_AUTO_APPROVE_CLOUD:-off}")"
 
 say "Copying the app to $HOST"
 "${SSH[@]}" "$HOST" 'mkdir -p ~/cathay-live/data'
@@ -40,6 +42,7 @@ Description=Cathay Student live demo
 After=network.target
 [Service]
 WorkingDirectory=/home/$(whoami)/cathay-live
+Environment=TZ=Asia/Hong_Kong
 ExecStart=/usr/bin/node server.js
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
