@@ -298,6 +298,7 @@ seating/      seat inventory + Student Zone (/api/seating): engine.js (allocatio
               repository.js (persistence), service.js (bookings, holds, check-in, exclusions, reviews), routes.js
 docs/SEATING.md  seating architecture, allocation rules, production integration
 docs/ERD.md   data model (ERD) of the whole app: accounts, trips, verification, seating, chat
+docs/DATAFLOW.md  system overview and data flows: verification, points, hot pick, seating, retention
 oag.js        OAG Flight Info API client (server-side, key from .env)
 mobile.html   phone-frame wrapper around index.html (9:41 status bar)
 .env.example  SMTP settings template (server.js only)
