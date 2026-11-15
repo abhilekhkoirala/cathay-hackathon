@@ -284,7 +284,7 @@ test('impossible arrangement: flagged for review with a neutral message, then re
   const inReview = ppl.filter((p) => rec(F).pax[p.id].alloc === 'review');
   assert.equal(inReview.length, 1);
   const rv = await map(inReview[0], F);
-  assert.match(rv.me.notice, /arrange your Student Zone seat by hand/);
+  assert.match(rv.me.notice, /arrange your student seat by hand/);
   assert.ok(!/exclu|restrict|Tia|Uma|Vic/i.test(rv.me.notice));
   const ov = (await call('GET', `/api/seating/ops/flights/${F.fid}`, undefined, O)).flight;
   const review = ov.reviews.find((r) => r.kind === 'constraint' && r.status === 'open');

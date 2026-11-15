@@ -207,7 +207,7 @@ async function reallocate(f, prefs, reason, actor = 'system') {
   const lost = Object.entries(f.pax).filter(([, p]) => p.seat && (p.status === 'checked_in' || p.seatKind === 'manual') && (ext.sold.has(p.seat) || ext.blocked.has(p.seat))).map(([u]) => u);
   if (lost.length) want.push({ kind: 'seat_unavailable', uids: lost });
   syncReviews(f, want);
-  if (out.moved.length) log(f, `Reallocation (${reason}): ${out.moved.length} Student Zone passenger${out.moved.length > 1 ? 's' : ''} moved.`);
+  if (out.moved.length) log(f, `Reallocation (${reason}): ${out.moved.length} student${out.moved.length > 1 ? 's' : ''} re-seated.`);
   if (out.moved.length || out.unplaced.length) repo.audit({ fid: f.id, actor, action: 'reallocated', reason, moved: out.moved.length, unplaced: out.unplaced.length, solver: out.solver });
   return out;
 }
@@ -268,7 +268,7 @@ function book(user, fid, body) {
     if (p.status !== 'checked_in') p.wantsStudent = b.studentSeating === true && cabin === 'Economy';
     p.updatedAt = iso();
     await reallocate(f, prefs, 'booking');
-    const denied = p.wantsStudent && !p.student ? studentVerify.eligibleOn(user, f.seg.dep).reason || 'The Student Zone is for verified students aged 18+.' : undefined;
+    const denied = p.wantsStudent && !p.student ? studentVerify.eligibleOn(user, f.seg.dep).reason || 'Student seating is for verified students aged 18+.' : undefined;
     return { view: await passengerView(f, prefs, uid), studentDenied: denied };
   }, { create: seg });
 }
@@ -409,7 +409,7 @@ function unlock(user, fid, method) {
 function chatMembers(fid) { const r = ((db.chat || {}).rooms || {})[fid]; return r ? Object.entries(r.members).filter(([, m]) => !m.left).map(([u]) => u) : []; }
 function exclusionGate(f, uid) {
   const p = mine(f, uid);
-  if (!p.student) fail(403, 'Seating preferences are for verified students in the Student Zone on this flight.');
+  if (!p.student) fail(403, 'Seating preferences are for verified students with student seating on this flight.');
   if (now() > depMs(f) - POLICY.exclusionDeadlineHours * 3600e3) fail(409, `Seating preferences close ${POLICY.exclusionDeadlineHours} hours before departure.`);
   return p;
 }
@@ -458,9 +458,9 @@ function addExclusion(uid, fid, target) {
 
 /* ---------- views ---------- */
 const NOTICE = {
-  assigned: (p) => `Your Student Zone seat is ${p.seat}.`,
-  waitlisted: () => "The Student Zone is full on this flight right now. We'll seat you there as soon as a seat opens; otherwise you'll get a regular seat at check-in.",
-  review: () => "We need to arrange your Student Zone seat by hand. Our team will confirm it before check-in; you don't need to do anything.",
+  assigned: (p) => `Your student seat is ${p.seat}.`,
+  waitlisted: () => "Student seating is full on this flight right now. We'll seat you next to students as soon as a seat opens; otherwise you'll get a regular seat at check-in.",
+  review: () => "We need to arrange your student seat by hand. Our team will confirm it before check-in; you don't need to do anything.",
 };
 /** What one passenger may see: the seat map of THEIR cabin (seat states only), the zone's capacity and their own
  *  booking. Never other passengers' ids, names, bookings or preferences, and never why a seat is unavailable. */

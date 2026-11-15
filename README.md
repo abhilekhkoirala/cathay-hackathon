@@ -238,6 +238,21 @@ The protected-rows design is still available with `SEATING_MODE=zone` (`test/sea
 
 A verified student invites **up to 2 parents** with a Companion Pass link (`#/p/CODE`, on the student perks page). The parent sees what they get, creates a normal account (no passport scan) and each parent gets **one visit during the whole study programme** with **+1 checked bag (23 kg)** and a **free date change**. Their **first booked trip** earns a welcome bonus of **20% of its Asia Miles**. It's valid while the student is verified **and 6 months after** (the graduation trip). The app nudges the student when graduation is within 6 months or their first trip to the university's country is coming up. Parents get no student features and never see their student's chats or seat. Links from members who aren't verified students do nothing, and the server enforces the limit of 2 parents.
 
+## Student bag delivery ("Land light")
+
+Verified students can have up to 2 bags taken from the arrivals desk to their door (dorm, flat) the same evening, so they leave the airport hands-free on moving-in day.
+
+- **Where:** offered with a pop-up the first time a student opens a new trip, then as a block on the trip page. Also on *Points & rewards*.
+- **Booking:** the student enters the delivery address. It must be booked at least 24 hours before landing, so the delivery partner can plan volumes.
+- **Price:** **5,000 student points**, or the **student price of $30 by card** (usually about $42 / HK$327), or a mix. Each 1,000 points takes $6 off the card price. Points are deducted from the balance at once, and the card part is added to the trip's total.
+- **No free delivery:** a free first use could be taken once by someone who never flies Cathay again.
+
+**Why $30?** Assume a partner cost of about $18 per delivery, 3% card fees, and students' willingness to pay spread evenly up to the $42 retail price. Then Cathay's profit per student offered is (0.97x − 18)(1 − x/42), which is highest at x = (0.97·42 + 18)/1.94 ≈ **$30**.
+
+At that price about 29% of students book, Cathay earns about $11 per card delivery, and students save $12. A token 10% discount ($37.80) would earn Cathay about 40% less and help 3× fewer students.
+
+5,000 points cost Cathay 5,000 × $0.0036 = $18, so a points delivery breaks even. Every mix of points and card earns between $0 and $11. *(Partner cost and demand are assumptions to confirm in a pilot.)*
+
 ## Student perks
 
 Unlocked automatically by the verified student membership (*Points & rewards*, or the *Student perks* quick link on the Overview), no promo codes:
