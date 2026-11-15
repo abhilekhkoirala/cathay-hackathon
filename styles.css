@@ -707,3 +707,12 @@ a.sz-choice{text-decoration:none}
 .bag-block.booked{background:radial-gradient(120% 140% at 100% 0%,rgba(255,255,255,.18),transparent 55%),linear-gradient(135deg,#1f7a54,#3f9a72)}
 .bag-paid{display:inline-block;margin-top:10px;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:12.5px;font-weight:600}
 @media (max-width:600px){.bag-block{flex-wrap:wrap}.bag-cta{width:100%}}
+
+.bag-addr{display:grid;gap:6px;margin:0}
+.bag-addr span{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.bag-addr .ico{width:16px;height:16px;color:var(--brand)}
+.bag-addr input{width:100%;padding:11px 12px;border:1.5px solid var(--line);border-radius:12px;font:inherit;background:#fff}
+.bag-addr input:focus{outline:none;border-color:var(--brand)}
+.bag-bal{margin:2px 0 0;font-size:13px;color:var(--muted)}.bag-bal b{color:var(--ink)}
+.bag-tiles{display:grid;gap:8px}
+.bag-to{display:flex;align-items:center;gap:6px;margin-top:8px!important;font-weight:600;color:#fff!important}.bag-to .ico{width:16px;height:16px;color:var(--lime)}
+.bag-to-sm{margin-right:8px}

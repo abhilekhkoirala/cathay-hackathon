@@ -558,10 +558,11 @@
    * (a free first delivery could be taken once by someone who never flies Cathay again). Booked at least 24 h before landing.
    * 5,000 pts: a point is worth ~US$0.0084 to the student, so 5,000 < the ~US$42 retail price (tempting), and it covers
    * a partner price up to 5,000 x US$0.0036 = US$18 (no loss for Cathay). Stored as a 'bag' entry in p.redeemed. */
-  // Student price by card: $25 instead of the usual ~$42 (HK$327 retail), still above the ~US$18 partner target, so
-  // Cathay doesn't lose and students have a reason not to carry their bags themselves. 5,000 pts also cover ~US$18.
-  const BAG_PTS = 5000, BAG_CASH = 25, BAG_RETAIL = 42;
-  const bagCashFor = (pts) => Math.round(((BAG_PTS - pts) / BAG_PTS) * BAG_CASH * 100) / 100; // 1,000 pts = $5 off
+  // Student price by card: $30 instead of the usual ~$42 (HK$327 retail). It maximises Cathay's delivery profit
+  // (0.97x - 18)(1 - x/42) -> x* = (0.97*42 + 18) / 1.94 = $30 (partner cost ~$18, 3% card fees, willingness to pay
+  // spread over $0-42). 5,000 pts cover the ~$18 partner cost (5,000 x US$0.0036). Mixed: 1,000 pts = $6 off.
+  const BAG_PTS = 5000, BAG_RETAIL = 42, BAG_CASH = 30;
+  const bagCashFor = (pts) => Math.round(((BAG_PTS - pts) / BAG_PTS) * BAG_CASH * 100) / 100;
   /* Pay with student points, card, or a mix (all the points you have, rest by card). */
   function bagPay(t, p) {
     const have = Math.min(BAG_PTS, Math.floor(Math.max(0, spLeft(p)) / 100) * 100);
@@ -570,8 +571,13 @@
       have > 0 && have < BAG_PTS && ['mix', `${have.toLocaleString()} pts + $${bagCashFor(have).toFixed(2)}`, 'Points + card'],
       ['cash', `$${BAG_CASH}`, `By card · student price <s>$${BAG_RETAIL}</s>`],
     ].filter(Boolean);
-    return `<div class="bag-pay" role="radiogroup" aria-label="How to pay">${tiles.map(([v, big, small], k) => `
-      <label class="bag-tile"><input type="radio" name="bagpay" value="${v}" ${k === 0 ? 'checked' : ''}><b>${big}</b><span>${small}</span></label>`).join('')}
+    const pts0 = Math.max(0, spLeft(p));
+    return `<div class="bag-pay">
+      <label class="field bag-addr"><span>${icon('home')} Deliver to</span>
+        <input name="bagAddr" required maxlength="160" autocomplete="street-address" placeholder="Hall and room, or street, district" value="${esc(store.get('bagAddr', '') || '')}"></label>
+      <p class="bag-bal">You have <b>${pts0.toLocaleString()}</b> student points</p>
+      <div class="bag-tiles" role="radiogroup" aria-label="How to pay">${tiles.map(([v, big, small], k) => `
+      <label class="bag-tile"><input type="radio" name="bagpay" value="${v}" ${k === 0 ? 'checked' : ''}><b>${big}</b><span>${small}</span></label>`).join('')}</div>
       <button class="btn btn-primary block" data-action="bag-book" data-ref="${t.ref}">Book delivery</button></div>`;
   }
   /* The offer: a pop-up with the 3 steps and the payment choice. */
@@ -606,6 +612,7 @@
       <div class="bag-block-ico">${icon('check')}</div>
       <div><p class="bag-kicker">Bag delivery booked</p><h3>Your bags go straight to your door</h3>
         <p>Land in ${to}, drop up to 2 bags at the arrivals desk and head out hands-free. They arrive the same evening.</p>
+        ${r.address ? `<p class="bag-to">${icon('home')} ${esc(r.address)}</p>` : ''}
         <span class="bag-paid">Paid ${[r.pts ? r.pts.toLocaleString() + ' student points' : '', r.cash ? '$' + r.cash.toFixed(2) : ''].filter(Boolean).join(' + ')}</span></div></div>`;
     if (!up || !bagOpen(t)) return '';
     // First visit after booking: suggest it with the pop-up, once per trip.
@@ -627,11 +634,11 @@
         <p class="muted sm">Two suitcases, a backpack and a brand-new city? Drop your bags at the arrivals desk, take the train with nothing but your phone, and find everything waiting at your dorm the same evening. Your first night in a new city should be about the city, not the luggage.</p></div></div>
       <ul class="perk-list">
         <li>${icon('tag')} <b>${BAG_PTS.toLocaleString()} student points per delivery</b>: up to 2 bags, perfect for moving-in day</li>
-        <li>${icon('gift')} Or pay the student price of $${BAG_CASH} by card (usually $${BAG_RETAIL}), or mix points and card</li>
+        <li>${icon('gift')} Or pay the student price by card: $${BAG_CASH} instead of $${BAG_RETAIL} (about 30% off), or mix points and card</li>
         <li>${icon('check')} Book at least 24 hours before you land; we hand your bags to our delivery partner at arrivals</li>
       </ul>
       ${trips.map((t) => row(t, `<button class="btn btn-primary sm-btn" data-action="bag-offer" data-ref="${t.ref}">Add delivery</button>`)).join('')}
-      ${done.map((r) => { const t = findTrip(r.ref); return t ? row(t, `<span class="badge ok">Booked · ${[r.pts ? r.pts.toLocaleString() + ' pts' : '', r.cash ? '$' + r.cash.toFixed(2) : ''].filter(Boolean).join(' + ')}</span>`) : ''; }).join('')}
+      ${done.map((r) => { const t = findTrip(r.ref); return t ? row(t, (r.address ? `<span class="muted sm bag-to-sm">${esc(r.address)}</span> ` : '') + `<span class="badge ok">Booked · ${[r.pts ? r.pts.toLocaleString() + ' pts' : '', r.cash ? '$' + r.cash.toFixed(2) : ''].filter(Boolean).join(' + ')}</span>`) : ''; }).join('')}
       ${!trips.length && !done.length ? '<p class="muted sm">Book a flight and you can add bag delivery here.</p>' : ''}
     </div>`;
   }
@@ -2633,12 +2640,16 @@
       const p = perks(), t = findTrip(el.dataset.ref);
       if (!t || !bagOpen(t)) return toast('Bag delivery must be booked at least 24 hours before you land.');
       if (bagBookings(p).some((r) => r.ref === t.ref)) return toast('Bag delivery is already booked for this trip.');
-      const how = ((el.closest('.bag-pay') || document).querySelector('input[name="bagpay"]:checked') || {}).value || 'cash';
+      const box = el.closest('.bag-pay') || document, addrEl = box.querySelector('[name="bagAddr"]');
+      const address = ((addrEl && addrEl.value) || '').trim().replace(/\s+/g, ' ');
+      if (address.length < 6) { toast('Add the address where we should deliver your bags.'); if (addrEl) addrEl.focus(); return; }
+      store.set('bagAddr', address);
+      const how = (box.querySelector('input[name="bagpay"]:checked') || {}).value || 'cash';
       const have = Math.min(BAG_PTS, Math.floor(Math.max(0, spLeft(p)) / 100) * 100);
       const pts = how === 'pts' ? BAG_PTS : how === 'mix' ? have : 0;
       if (how === 'pts' && have < BAG_PTS) return toast('Not enough student points.');
       const cash = bagCashFor(pts);
-      p.redeemed = [...(p.redeemed || []), { id: 'bag', ref: t.ref, pts, cash, at: toISO(new Date()) }];
+      p.redeemed = [...(p.redeemed || []), { id: 'bag', ref: t.ref, pts, cash, address, at: toISO(new Date()) }];
       savePerks(p);
       if (cash) { t.total = Math.round((t.total + cash) * 100) / 100; saveTrips(); }
       document.querySelector('.modal-bg')?.remove();
